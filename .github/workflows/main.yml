@@ -1,0 +1,189 @@
+name: GKI-6.1 Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      TODO:
+        description: To do
+        default: "kernel"
+        type: choice
+        options:
+          - "kernel"
+          - "defconfig"
+      STATUS:
+        description: Run type
+        default: "RELEASE"
+        type: choice
+        options:
+          - "RELEASE"
+          - "BETA"
+      TEST:
+        description: debug the pipeline
+        default: "no"
+        type: choice
+        options:
+          - "no"
+          - "yes"
+      LTO:
+        description: enable LTO optimization
+        default: "thinLTO"
+        type: choice
+        options:
+          - "noneLTO"
+          - "thinLTO"
+          - "fullLTO"
+      BUILD_VANILLA:
+        description: "Build Vanilla (no KSU)"
+        type: boolean
+        default: true
+      BUILD_KSU:
+        description: "Build with KernelSU"
+        type: boolean
+        default: true
+      BUILD_KSU_SUSFS:
+        description: "Build with KernelSU + SUSFS"
+        type: boolean
+        default: true
+
+env:
+  MAN_DISABLE: true
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          ENTRIES=""
+
+          if [[ "${{ github.event.inputs.BUILD_VANILLA }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"Vanilla\",\"KSU\":\"no\",\"KSU_SUSFS\":\"false\"},"
+          fi
+
+          if [[ "${{ github.event.inputs.BUILD_KSU }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"KSU\",\"KSU\":\"KSU\",\"KSU_SUSFS\":\"false\"},"
+          fi
+
+          if [[ "${{ github.event.inputs.BUILD_KSU_SUSFS }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"KSU+SUSFS\",\"KSU\":\"KSU\",\"KSU_SUSFS\":\"true\"},"
+          fi
+
+          ENTRIES="[${ENTRIES%,}]"
+          echo "matrix={\"include\":${ENTRIES}}" >> $GITHUB_OUTPUT
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: 🧹 Maximizar espacio en el servidor
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache gh bc bison flex libssl-dev libelf-dev dwarves cpio curl
+          pip install lxml
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "~/bin" >> $GITHUB_PATH
+
+      - name: Cache ccache + LTO
+        uses: actions/cache@v6
+        id: ccache-cache
+        with:
+          path: |
+            ~/.ccache
+            /dev/shm/thinlto-cache
+          key: ccache-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: ccache-${{ matrix.name }}
+
+      - name: Run Build Script
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Apuntando a tu repositorio
+          KERNEL_REPO: https://github.com/david98pc/android_kernel_6.1
+          KSU: ${{ matrix.KSU }}
+          KSU_SUSFS: ${{ matrix.KSU_SUSFS }}
+          TODO: ${{ inputs.TODO }}
+          STATUS: ${{ inputs.STATUS }}
+          LTO: ${{ inputs.LTO }}
+          BUILD_NAME: ${{ matrix.name }}
+        run: |
+          export GIT_CLONE_PROTECTION_ACTIVE=false
+          chmod +x *.sh py/*.py || true
+          
+          # NOTA: Si no tienes el archivo build.sh en tu repositorio, 
+          # deberás reemplazar esta línea ./build.sh con los comandos de repo sync y bazel build.
+          ./build.sh
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.name }}-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 1
+
+  release:
+    needs: build
+    if: github.event.inputs.TODO != 'defconfig' && github.event.inputs.STATUS == 'RELEASE'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Prepare release body
+        run: |
+            VARIANTS=$(ls release-artifacts/*.zip 2>/dev/null | xargs -n1 basename | sed 's/.zip//')
+
+            {
+            cat << EOF
+            ### 📢 GKI 6.1 Kernel Release
+
+            **Build Information:**
+            - 🐧 **Kernel:** Android 14 GKI (6.1.xx)
+            - 🔥 **LTO optimizations:** ${{ inputs.LTO }}
+            - 📦 **Variants:**
+            $(echo "$VARIANTS" | sed 's/^/  - /')
+            
+            **Optimizaciones incluidas:**
+            - Ajustes de I/O y Scheduler adaptados.
+            - Gobernadores eficientes integrados.
+            - Soporte para KernelSU y SUSFS habilitado según variante.
+            EOF
+            } > release_body.md
+
+      - name: Upload All Builds to release repo
+        uses: softprops/action-gh-release@v2
+        with:
+          name: GKI-6.1-${{ github.run_number }}
+          tag_name: Build-${{ github.run_number }}
+          prerelease: false
+          files: |
+            release-artifacts/*.zip
+          body_path: release_body.md
