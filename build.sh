@@ -11,7 +11,7 @@ TIMEZONE="America/Mexico_City"
 ANYKERNEL_REPO="https://github.com/david98pc/AnyKernel3"
 
 KERNEL_DEFCONFIG="gki_defconfig"
-KERNEL_BRANCH="common-android14-6.1" # Asegúrate de que esta sea tu rama principal
+KERNEL_BRANCH="main" # Asegúrate de que esta sea tu rama principal
 
 # Set timezone
 sudo timedatectl set-timezone "$TIMEZONE" || export TZ="$TIMEZONE"
