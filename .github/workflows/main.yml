@@ -33,15 +33,19 @@ on:
           - "thinLTO"
           - "fullLTO"
       BUILD_VANILLA:
-        description: "Build Vanilla (no KSU)"
+        description: "Build Vanilla (Sin Root)"
         type: boolean
         default: true
-      BUILD_KSU:
-        description: "Build with KernelSU"
+      BUILD_KSUN:
+        description: "Build with KernelSU-Next"
         type: boolean
         default: true
-      BUILD_KSU_SUSFS:
-        description: "Build with KernelSU + SUSFS"
+      BUILD_KSUN_SUSFS:
+        description: "Build with KernelSU-Next + SUSFS"
+        type: boolean
+        default: true
+      BUILD_SKSU:
+        description: "Build with SukiSU-Ultra"
         type: boolean
         default: true
 
@@ -63,12 +67,16 @@ jobs:
             ENTRIES="${ENTRIES}{\"name\":\"Vanilla\",\"KSU\":\"no\",\"KSU_SUSFS\":\"false\"},"
           fi
 
-          if [[ "${{ github.event.inputs.BUILD_KSU }}" == "true" ]]; then
-            ENTRIES="${ENTRIES}{\"name\":\"KSU\",\"KSU\":\"KSU\",\"KSU_SUSFS\":\"false\"},"
+          if [[ "${{ github.event.inputs.BUILD_KSUN }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"KSUN\",\"KSU\":\"KSUN\",\"KSU_SUSFS\":\"false\"},"
           fi
 
-          if [[ "${{ github.event.inputs.BUILD_KSU_SUSFS }}" == "true" ]]; then
-            ENTRIES="${ENTRIES}{\"name\":\"KSU+SUSFS\",\"KSU\":\"KSU\",\"KSU_SUSFS\":\"true\"},"
+          if [[ "${{ github.event.inputs.BUILD_KSUN_SUSFS }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"KSUN+SUSFS\",\"KSU\":\"KSUN\",\"KSU_SUSFS\":\"true\"},"
+          fi
+          
+          if [[ "${{ github.event.inputs.BUILD_SKSU }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"SKSU\",\"KSU\":\"SKSU\",\"KSU_SUSFS\":\"false\"},"
           fi
 
           ENTRIES="[${ENTRIES%,}]"
@@ -119,7 +127,6 @@ jobs:
       - name: Run Build Script
         env:
           GH_TOKEN: ${{ github.token }}
-          # Apuntando a tu repositorio
           KERNEL_REPO: https://github.com/david98pc/android_kernel_6.1
           KSU: ${{ matrix.KSU }}
           KSU_SUSFS: ${{ matrix.KSU_SUSFS }}
@@ -130,9 +137,6 @@ jobs:
         run: |
           export GIT_CLONE_PROTECTION_ACTIVE=false
           chmod +x *.sh py/*.py || true
-          
-          # NOTA: Si no tienes el archivo build.sh en tu repositorio, 
-          # deberás reemplazar esta línea ./build.sh con los comandos de repo sync y bazel build.
           ./build.sh
 
       - name: Upload build artifacts
@@ -147,6 +151,8 @@ jobs:
     needs: build
     if: github.event.inputs.TODO != 'defconfig' && github.event.inputs.STATUS == 'RELEASE'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -172,9 +178,8 @@ jobs:
             $(echo "$VARIANTS" | sed 's/^/  - /')
             
             **Optimizaciones incluidas:**
-            - Ajustes de I/O y Scheduler adaptados.
-            - Gobernadores eficientes integrados.
-            - Soporte para KernelSU y SUSFS habilitado según variante.
+            - KernelSU-Next / SukiSU-Ultra integrados
+            - Soporte para SUSFS habilitado según variante
             EOF
             } > release_body.md
 
