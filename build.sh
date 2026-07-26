@@ -4,9 +4,9 @@
 WORKDIR="$(pwd)"
 RELEASE_DIR="$WORKDIR/artifacts"
 
-KERNEL_NAME="GKI-MTK"
+KERNEL_NAME="Bomb-GKI"
 USER="david98pc"
-HOST="GKI-MTK"
+HOST="Bomb-GKI"
 TIMEZONE="America/Mexico_City"
 ANYKERNEL_REPO="https://github.com/david98pc/AnyKernel3"
 
