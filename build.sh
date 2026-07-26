@@ -191,7 +191,7 @@ if [ "$KSU" = "KSU" ]; then
     sed -i "/    git pull && echo \"\[+\] Repository updated.\"/d" "kernel/setup.sh"
     
     git config --global user.email "david98pc@users.noreply.github.com"
-    git config --global user.name "David Aaron Pool Colli"
+    git config --global user.name "Davvvvvv"
     
     git add .
     git commit -m "susfs patch"
