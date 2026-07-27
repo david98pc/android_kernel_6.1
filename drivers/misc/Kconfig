@@ -505,13 +505,10 @@ config VCPU_STALL_DETECTOR
 
 	  If you do not intend to run this kernel as a guest, say N.
 
-config EVONIX_COS_POWER_COMPAT
-	tristate "EVONIX ColorOS power compatibility nodes"
+config BOMB_CHARGE
+	tristate "Bomb Charge bypass charging control"
 	depends on POWER_SUPPLY
 	default y
-	help
-	  Real-backed ColorOS/OPlus power_supply compatibility nodes
-	  and bypass charging support.
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
