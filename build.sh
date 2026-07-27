@@ -351,13 +351,13 @@ if [ $STATUS == "BETA" ]; then
   AK3_ZIP_NAME=${AK3_ZIP_NAME//BUILD_DATE/$BUILD_DATE}
   AK3_ZIP_NAME=${AK3_ZIP_NAME//-REL/}
   sed -i \
-    "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${LINUX_VERSION} (${BUILD_DATE}) ${VARIANT} by David Aaron Pool Colli (david98pc)/g" \
+    "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${LINUX_VERSION} (${BUILD_DATE}) ${VARIANT} by Davvvvvvv (david98pc)/g" \
     $WORKDIR/anykernel/anykernel.sh
 else
   AK3_ZIP_NAME=${AK3_ZIP_NAME//-BUILD_DATE/}
   AK3_ZIP_NAME=${AK3_ZIP_NAME//REL/$RELEASE}
   sed -i \
-    "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${RELEASE} ${LINUX_VERSION} ${VARIANT} by David Aaron Pool Colli (david98pc)/g" \
+    "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${RELEASE} ${LINUX_VERSION} ${VARIANT} by Davvvvvvv (david98pc)/g" \
     $WORKDIR/anykernel/anykernel.sh
 fi
 
