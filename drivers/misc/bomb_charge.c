@@ -8,22 +8,17 @@
  * No fake sysfs classes, no OPlus/ColorOS compat nodes, no /proc shims.
  */
 
-#include <linux/atomic.h>
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/power_supply.h>
-#include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/uaccess.h>
-#include <linux/version.h>
-#include <linux/fs.h>
 #include <linux/workqueue.h>
 #include <linux/jiffies.h>
 #include <linux/kprobes.h>
-#include <linux/delay.h>
+#include <linux/mutex.h>
 
 #define BCG_NAME "bomb_charge"
 
@@ -175,42 +170,26 @@ struct charger_device;
 typedef struct charger_device *(*bcg_get_charger_by_name_t)(const char *name);
 typedef int (*bcg_charger_dev_enable_t)(struct charger_device *chg_dev, bool en);
 typedef int (*bcg_charger_dev_enable_powerpath_t)(struct charger_device *chg_dev, bool en);
-typedef int (*bcg_charger_dev_cp_set_mode_t)(struct charger_device *chg_dev, int mode);
-typedef int (*bcg_charger_dev_cp_device_init_t)(struct charger_device *chg_dev, int mode);
 typedef int (*bcg_charger_dev_cp_enable_adc_t)(struct charger_device *chg_dev, bool en);
-typedef int (*bcg_charger_dev_set_charging_current_t)(struct charger_device *chg_dev, u32 uA);
 
 static bcg_get_charger_by_name_t bcg_get_charger_by_name_fn;
 static bcg_charger_dev_enable_t bcg_charger_dev_enable_fn;
 static bcg_charger_dev_enable_powerpath_t bcg_charger_dev_enable_powerpath_fn;
-static bcg_charger_dev_cp_set_mode_t bcg_charger_dev_cp_set_mode_fn;
-static bcg_charger_dev_cp_device_init_t bcg_charger_dev_cp_device_init_fn;
 static bcg_charger_dev_cp_enable_adc_t bcg_charger_dev_cp_enable_adc_fn;
-static bcg_charger_dev_set_charging_current_t bcg_charger_dev_set_charging_current_fn;
 
 static struct charger_device *bcg_primary_chgdev;
 static struct charger_device *bcg_cp_master_chgdev;
 static bool bcg_bypass_guard_active;
-static bool bcg_cp_guard_registered;
 static bool bcg_real_bypass_cached;
+static bool bcg_kp_charger_enable_registered;
+static bool bcg_kp_charger_powerpath_registered;
+static DEFINE_MUTEX(bcg_state_lock);
 
-static struct kprobe bcg_kp_cp_set_mode = {
-	.symbol_name = "charger_dev_cp_set_mode",
-};
-static struct kprobe bcg_kp_cp_device_init = {
-	.symbol_name = "charger_dev_cp_device_init",
-};
-static struct kprobe bcg_kp_cp_enable_adc = {
-	.symbol_name = "charger_dev_cp_enable_adc",
-};
 static struct kprobe bcg_kp_charger_enable = {
 	.symbol_name = "charger_dev_enable",
 };
 static struct kprobe bcg_kp_charger_powerpath = {
 	.symbol_name = "charger_dev_enable_powerpath",
-};
-static struct kprobe bcg_kp_set_charging_current = {
-	.symbol_name = "charger_dev_set_charging_current",
 };
 
 #ifdef CONFIG_KPROBES
@@ -276,15 +255,10 @@ static int bcg_resolve_charger_backend(void)
 	if (!bcg_charger_dev_enable_powerpath_fn) {
 		bcg_charger_dev_enable_powerpath_fn =
 			(bcg_charger_dev_enable_powerpath_t)bcg_lookup_symbol_addr("charger_dev_enable_powerpath");
-		if (!bcg_charger_dev_enable_powerpath_fn)
-			pr_warn(BCG_NAME ": charger_dev_enable_powerpath lookup failed, continuing\n");
-	}
-
-	if (!bcg_charger_dev_set_charging_current_fn) {
-		bcg_charger_dev_set_charging_current_fn =
-			(bcg_charger_dev_set_charging_current_t)bcg_lookup_symbol_addr("charger_dev_set_charging_current");
-		if (!bcg_charger_dev_set_charging_current_fn)
-			pr_warn(BCG_NAME ": charger_dev_set_charging_current lookup failed, continuing\n");
+		if (!bcg_charger_dev_enable_powerpath_fn) {
+			pr_warn(BCG_NAME ": charger_dev_enable_powerpath lookup failed\n");
+			return -EOPNOTSUPP;
+		}
 	}
 
 	if (IS_ERR_OR_NULL(bcg_primary_chgdev))
@@ -329,31 +303,11 @@ static int bcg_resolve_cp_master_backend(void)
 		}
 	}
 
-	if (!bcg_charger_dev_cp_set_mode_fn) {
-		bcg_charger_dev_cp_set_mode_fn =
-			(bcg_charger_dev_cp_set_mode_t)bcg_lookup_symbol_addr("charger_dev_cp_set_mode");
-		if (!bcg_charger_dev_cp_set_mode_fn) {
-			pr_warn(BCG_NAME ": charger_dev_cp_set_mode lookup failed\n");
-			return -ENOENT;
-		}
-	}
-
-	if (!bcg_charger_dev_cp_device_init_fn) {
-		bcg_charger_dev_cp_device_init_fn =
-			(bcg_charger_dev_cp_device_init_t)bcg_lookup_symbol_addr("charger_dev_cp_device_init");
-		if (!bcg_charger_dev_cp_device_init_fn) {
-			pr_warn(BCG_NAME ": charger_dev_cp_device_init lookup failed\n");
-			return -ENOENT;
-		}
-	}
-
 	if (!bcg_charger_dev_cp_enable_adc_fn) {
 		bcg_charger_dev_cp_enable_adc_fn =
 			(bcg_charger_dev_cp_enable_adc_t)bcg_lookup_symbol_addr("charger_dev_cp_enable_adc");
-		if (!bcg_charger_dev_cp_enable_adc_fn) {
-			pr_warn(BCG_NAME ": charger_dev_cp_enable_adc lookup failed\n");
-			return -ENOENT;
-		}
+		if (!bcg_charger_dev_cp_enable_adc_fn)
+			pr_info(BCG_NAME ": cp ADC control unavailable, continuing\n");
 	}
 
 	if (!bcg_cp_master_chgdev) {
@@ -385,57 +339,22 @@ static inline bool bcg_is_primary_charger_arg(struct charger_device *chg)
 	return bcg_primary_chgdev && chg == bcg_primary_chgdev;
 }
 
-static int bcg_guard_cp_set_mode_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct charger_device *chg = (struct charger_device *)regs->regs[0];
-
-	if (bcg_bypass_guard_active && bcg_is_cp_master_arg(chg) && regs->regs[1] != 0) {
-		regs->regs[1] = 0;
-		pr_info(BCG_NAME ": guard forced cp_set_mode 0\n");
-	}
-	return 0;
-}
-
-static int bcg_guard_cp_device_init_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct charger_device *chg = (struct charger_device *)regs->regs[0];
-
-	if (bcg_bypass_guard_active && bcg_is_cp_master_arg(chg) && regs->regs[1] != 0) {
-		regs->regs[1] = 0;
-		pr_info(BCG_NAME ": guard forced cp_device_init 0\n");
-	}
-	return 0;
-}
-
-static int bcg_guard_cp_enable_adc_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct charger_device *chg = (struct charger_device *)regs->regs[0];
-
-	if (bcg_bypass_guard_active && bcg_is_cp_master_arg(chg) && regs->regs[1] != 0) {
-		regs->regs[1] = 0;
-		pr_info(BCG_NAME ": guard blocked cp_enable_adc true\n");
-	}
-	return 0;
-}
-
 static int bcg_guard_charger_enable_pre(struct kprobe *p, struct pt_regs *regs)
 {
 	struct charger_device *chg = (struct charger_device *)regs->regs[0];
 
-	if (!bcg_bypass_guard_active)
+	if (!READ_ONCE(bcg_bypass_guard_active))
+		return 0;
+
+	/* Never alter unrelated charger devices such as et7480_chg. */
+	if (!bcg_is_primary_charger_arg(chg) && !bcg_is_cp_master_arg(chg))
 		return 0;
 
 	if (regs->regs[1] == 0)
 		return 0;
 
 	regs->regs[1] = 0;
-
-	if (bcg_is_cp_master_arg(chg))
-		pr_info(BCG_NAME ": guard blocked cp_master enable true");
-	else if (bcg_is_primary_charger_arg(chg))
-		pr_info(BCG_NAME ": guard blocked primary charger enable true");
-	else
-		pr_info(BCG_NAME ": guard blocked charger enable true chg=%px", chg);
+	pr_debug(BCG_NAME ": guard blocked charger enable chg=%px\n", chg);
 
 	return 0;
 }
@@ -444,108 +363,83 @@ static int bcg_guard_powerpath_pre(struct kprobe *p, struct pt_regs *regs)
 {
 	struct charger_device *chg = (struct charger_device *)regs->regs[0];
 
-	if (!bcg_bypass_guard_active)
+	if (!READ_ONCE(bcg_bypass_guard_active))
+		return 0;
+
+	/* Only the MT6375 primary charger owns the system power path. */
+	if (!bcg_is_primary_charger_arg(chg))
 		return 0;
 
 	if (regs->regs[1] != 0)
 		return 0;
 
 	regs->regs[1] = 1;
-
-	if (bcg_is_primary_charger_arg(chg))
-		pr_info(BCG_NAME ": guard forced primary powerpath true");
-	else
-		pr_info(BCG_NAME ": guard forced charger powerpath true chg=%px", chg);
+	pr_debug(BCG_NAME ": guard kept primary powerpath enabled\n");
 
 	return 0;
 }
 
-static int bcg_guard_set_charging_current_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct charger_device *chg = (struct charger_device *)regs->regs[0];
-
-	if (!bcg_bypass_guard_active)
-		return 0;
-
-	if (!bcg_is_primary_charger_arg(chg) && !bcg_is_cp_master_arg(chg))
-		return 0;
-
-	if (regs->regs[1] == 0)
-		return 0;
-
-	regs->regs[1] = 0;
-	pr_info(BCG_NAME ": guard forced charging_current 0 chg=%px", chg);
-
-	return 0;
-}
-
-static void bcg_register_cp_master_guard(void)
+static int bcg_register_bypass_guards(void)
 {
 	int ret;
-	bool ok = false;
 
-	if (bcg_cp_guard_registered)
-		return;
+	if (bcg_kp_charger_enable_registered &&
+	    bcg_kp_charger_powerpath_registered)
+		return 0;
 
-	bcg_kp_cp_set_mode.pre_handler = bcg_guard_cp_set_mode_pre;
-	bcg_kp_cp_device_init.pre_handler = bcg_guard_cp_device_init_pre;
-	bcg_kp_cp_enable_adc.pre_handler = bcg_guard_cp_enable_adc_pre;
 	bcg_kp_charger_enable.pre_handler = bcg_guard_charger_enable_pre;
 	bcg_kp_charger_powerpath.pre_handler = bcg_guard_powerpath_pre;
-	bcg_kp_set_charging_current.pre_handler = bcg_guard_set_charging_current_pre;
-
-	ret = register_kprobe(&bcg_kp_cp_set_mode);
-	pr_info(BCG_NAME ": guard register cp_set_mode ret=%d\n", ret);
-	if (!ret) ok = true;
-
-	ret = register_kprobe(&bcg_kp_cp_device_init);
-	pr_info(BCG_NAME ": guard register cp_device_init ret=%d\n", ret);
-	if (!ret) ok = true;
-
-	ret = register_kprobe(&bcg_kp_cp_enable_adc);
-	pr_info(BCG_NAME ": guard register cp_enable_adc ret=%d\n", ret);
-	if (!ret) ok = true;
 
 	ret = register_kprobe(&bcg_kp_charger_enable);
 	pr_info(BCG_NAME ": guard register charger_enable ret=%d\n", ret);
-	if (!ret) ok = true;
+	if (ret)
+		return ret;
+	bcg_kp_charger_enable_registered = true;
 
 	ret = register_kprobe(&bcg_kp_charger_powerpath);
 	pr_info(BCG_NAME ": guard register charger_powerpath ret=%d\n", ret);
-	if (!ret) ok = true;
+	if (ret) {
+		unregister_kprobe(&bcg_kp_charger_enable);
+		bcg_kp_charger_enable_registered = false;
+		return ret;
+	}
+	bcg_kp_charger_powerpath_registered = true;
 
-	ret = register_kprobe(&bcg_kp_set_charging_current);
-	pr_info(BCG_NAME ": guard register set_charging_current ret=%d\n", ret);
-	if (!ret) ok = true;
-
-	bcg_cp_guard_registered = ok;
+	return 0;
 }
 
-static void bcg_try_stop_cp_master_for_bypass(void)
+static void bcg_unregister_bypass_guards(void)
+{
+	if (bcg_kp_charger_powerpath_registered) {
+		unregister_kprobe(&bcg_kp_charger_powerpath);
+		bcg_kp_charger_powerpath_registered = false;
+	}
+
+	if (bcg_kp_charger_enable_registered) {
+		unregister_kprobe(&bcg_kp_charger_enable);
+		bcg_kp_charger_enable_registered = false;
+	}
+}
+
+static int bcg_stop_cp_master_for_bypass(void)
 {
 	int ret;
 
 	ret = bcg_resolve_cp_master_backend();
 	if (ret) {
-		pr_warn(BCG_NAME ": cp_master stop skipped ret=%d\n", ret);
-		return;
+		pr_warn(BCG_NAME ": cp_master unavailable ret=%d\n", ret);
+		return ret;
 	}
 
-	bcg_register_cp_master_guard();
-
-	ret = bcg_charger_dev_cp_enable_adc_fn(bcg_cp_master_chgdev, false);
-	pr_info(BCG_NAME ": cp_master enable_adc false ret=%d\n", ret);
-
-	ret = bcg_charger_dev_cp_set_mode_fn(bcg_cp_master_chgdev, 0);
-	pr_info(BCG_NAME ": cp_master set_mode 0 ret=%d\n", ret);
-
-	ret = bcg_charger_dev_cp_device_init_fn(bcg_cp_master_chgdev, 0);
-	pr_info(BCG_NAME ": cp_master device_init 0 ret=%d\n", ret);
+	if (bcg_charger_dev_cp_enable_adc_fn) {
+		ret = bcg_charger_dev_cp_enable_adc_fn(bcg_cp_master_chgdev, false);
+		if (ret)
+			pr_debug(BCG_NAME ": cp_master ADC disable returned %d\n", ret);
+	}
 
 	ret = bcg_charger_dev_enable_fn(bcg_cp_master_chgdev, false);
 	pr_info(BCG_NAME ": cp_master enable false ret=%d\n", ret);
-
-	msleep(500);
+	return ret;
 }
 
 /*
@@ -562,88 +456,122 @@ static DECLARE_DELAYED_WORK(bcg_bypass_reassert_work, bcg_bypass_reassert_workfn
 
 static int bcg_real_bypass_set(bool enable)
 {
-	int ret;
-	int pp_ret = 0;
+	int ret = 0;
+	int restore_ret;
+
+	mutex_lock(&bcg_state_lock);
+	if (!enable && !READ_ONCE(bcg_real_bypass_cached) &&
+	    !READ_ONCE(bcg_bypass_guard_active))
+		goto out_unlock;
 
 	ret = bcg_resolve_charger_backend();
 	if (ret)
-		return ret;
+		goto out_unlock;
 
 	if (enable) {
-		bcg_bypass_guard_active = true;
-		bcg_try_stop_cp_master_for_bypass();
+		if (READ_ONCE(bcg_real_bypass_cached))
+			goto out_unlock;
+
+		ret = bcg_resolve_cp_master_backend();
+		if (ret)
+			goto out_unlock;
+
+		ret = bcg_register_bypass_guards();
+		if (ret) {
+			pr_warn(BCG_NAME ": unable to install bypass guards: %d\n", ret);
+			goto out_unlock;
+		}
+
+		/* The handlers remain inert until the complete backend is ready. */
+		WRITE_ONCE(bcg_bypass_guard_active, true);
+
+		ret = bcg_charger_dev_enable_powerpath_fn(bcg_primary_chgdev, true);
+		if (ret) {
+			pr_warn(BCG_NAME ": cannot keep primary powerpath on: %d\n", ret);
+			goto rollback_enable;
+		}
+
+		ret = bcg_stop_cp_master_for_bypass();
+		if (ret)
+			goto rollback_enable;
+
+		ret = bcg_charger_dev_enable_fn(bcg_primary_chgdev, false);
+		if (ret) {
+			pr_warn(BCG_NAME ": primary charger disable failed: %d\n", ret);
+			goto rollback_enable;
+		}
+
+		WRITE_ONCE(bcg_real_bypass_cached, true);
+		mod_delayed_work(system_wq, &bcg_bypass_reassert_work,
+				 msecs_to_jiffies(BCG_BYPASS_REASSERT_MS));
+		pr_info(BCG_NAME ": bypass enabled\n");
+		goto out_unlock;
+	}
+
+	/* Stop the worker completely before restoring normal charging. */
+	WRITE_ONCE(bcg_bypass_guard_active, false);
+	cancel_delayed_work_sync(&bcg_bypass_reassert_work);
+
+	ret = bcg_charger_dev_enable_powerpath_fn(bcg_primary_chgdev, true);
+	if (ret)
+		pr_warn(BCG_NAME ": powerpath restore returned %d\n", ret);
+
+	restore_ret = bcg_charger_dev_enable_fn(bcg_primary_chgdev, true);
+	if (restore_ret) {
+		pr_warn(BCG_NAME ": primary charger restore failed: %d\n",
+			restore_ret);
+		if (!ret)
+			ret = restore_ret;
 	} else {
-		bcg_bypass_guard_active = false;
+		WRITE_ONCE(bcg_real_bypass_cached, false);
+		pr_info(BCG_NAME ": bypass disabled\n");
 	}
+	goto out_unlock;
 
-	if (bcg_charger_dev_enable_powerpath_fn) {
-		pp_ret = bcg_charger_dev_enable_powerpath_fn(bcg_primary_chgdev, true);
-		if (pp_ret)
-			pr_warn(BCG_NAME ": powerpath keep-on returned %d\n", pp_ret);
-	}
-
-	/*
-	 * enable=true  => stop battery charging only (power path stays up)
-	 * enable=false => allow battery charging again
-	 */
-	ret = bcg_charger_dev_enable_fn(bcg_primary_chgdev, !enable);
-	if (ret) {
-		pr_warn(BCG_NAME ": charger_dev_enable(%d) failed: %d\n", !enable, ret);
-		return ret;
-	}
-
-	if (enable && bcg_charger_dev_set_charging_current_fn) {
-		ret = bcg_charger_dev_set_charging_current_fn(bcg_primary_chgdev, 0);
-		pr_info(BCG_NAME ": charging_current forced 0 ret=%d\n", ret);
-	}
-
-	bcg_real_bypass_cached = enable;
-	pr_info(BCG_NAME ": bypass %s\n", enable ? "enabled" : "disabled");
-
-	if (enable)
-		schedule_delayed_work(&bcg_bypass_reassert_work,
-				      msecs_to_jiffies(BCG_BYPASS_REASSERT_MS));
-	else
-		cancel_delayed_work(&bcg_bypass_reassert_work);
-
-	return 0;
+rollback_enable:
+	WRITE_ONCE(bcg_bypass_guard_active, false);
+	cancel_delayed_work_sync(&bcg_bypass_reassert_work);
+	bcg_charger_dev_enable_powerpath_fn(bcg_primary_chgdev, true);
+	bcg_charger_dev_enable_fn(bcg_primary_chgdev, true);
+	WRITE_ONCE(bcg_real_bypass_cached, false);
+out_unlock:
+	mutex_unlock(&bcg_state_lock);
+	return ret;
 }
 
 static void bcg_bypass_reassert_workfn(struct work_struct *work)
 {
 	int ret;
 
-	if (!bcg_bypass_guard_active || !bcg_primary_chgdev)
+	if (!READ_ONCE(bcg_bypass_guard_active) || !bcg_primary_chgdev)
 		return;
 
-	if (bcg_charger_dev_enable_powerpath_fn)
-		bcg_charger_dev_enable_powerpath_fn(bcg_primary_chgdev, true);
+	ret = bcg_charger_dev_enable_powerpath_fn(bcg_primary_chgdev, true);
+	if (ret)
+		pr_warn_ratelimited(BCG_NAME ": reassert powerpath failed: %d\n", ret);
 
 	if (bcg_cp_master_chgdev) {
 		if (bcg_charger_dev_cp_enable_adc_fn)
 			bcg_charger_dev_cp_enable_adc_fn(bcg_cp_master_chgdev, false);
-		if (bcg_charger_dev_cp_set_mode_fn)
-			bcg_charger_dev_cp_set_mode_fn(bcg_cp_master_chgdev, 0);
-		if (bcg_charger_dev_enable_fn)
-			bcg_charger_dev_enable_fn(bcg_cp_master_chgdev, false);
+		bcg_charger_dev_enable_fn(bcg_cp_master_chgdev, false);
 	}
 
 	/* bcg_bypass_guard_active == true implica bypass activo => no cargar */
 	ret = bcg_charger_dev_enable_fn(bcg_primary_chgdev, false);
 	if (ret)
-		pr_warn(BCG_NAME ": reassert charger_dev_enable failed: %d\n", ret);
+		pr_warn_ratelimited(BCG_NAME ": reassert charger disable failed: %d\n",
+				    ret);
 
-	if (bcg_charger_dev_set_charging_current_fn)
-		bcg_charger_dev_set_charging_current_fn(bcg_primary_chgdev, 0);
-
-	schedule_delayed_work(&bcg_bypass_reassert_work,
-			      msecs_to_jiffies(BCG_BYPASS_REASSERT_MS));
+	if (READ_ONCE(bcg_bypass_guard_active))
+		mod_delayed_work(system_wq, &bcg_bypass_reassert_work,
+				 msecs_to_jiffies(BCG_BYPASS_REASSERT_MS));
 }
 
 static ssize_t bypass_charging_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
-	return sysfs_emit(buf, "%d\n", bcg_real_bypass_cached ? 1 : 0);
+	return sysfs_emit(buf, "%d\n",
+			  READ_ONCE(bcg_real_bypass_cached) ? 1 : 0);
 }
 
 static ssize_t bypass_charging_store(struct device *dev,
@@ -680,12 +608,12 @@ static int bcg_create_real_bypass_attrs(void)
 	bcg_bypass_battery_psy = power_supply_get_by_name("battery");
 	if (!bcg_bypass_battery_psy) {
 		pr_warn(BCG_NAME ": battery power_supply not ready for bypass attrs\n");
-		return 0;
+		return -EPROBE_DEFER;
 	}
 
 	ret = device_create_file(&bcg_bypass_battery_psy->dev,
 				 &dev_attr_bypass_charging);
-	if (ret && ret != -EEXIST) {
+	if (ret) {
 		pr_warn(BCG_NAME ": bypass_charging create failed: %d\n", ret);
 		goto err_put_psy;
 	}
@@ -697,15 +625,19 @@ static int bcg_create_real_bypass_attrs(void)
 err_put_psy:
 	power_supply_put(bcg_bypass_battery_psy);
 	bcg_bypass_battery_psy = NULL;
-	return 0;
+	return ret;
 }
 
 static void bcg_bypass_retry_workfn(struct work_struct *work)
 {
+	int ret;
+
 	if (bcg_bypass_attrs_created)
 		return;
 
-	bcg_create_real_bypass_attrs();
+	ret = bcg_create_real_bypass_attrs();
+	if (ret == -EEXIST)
+		return;
 
 	if (!bcg_bypass_attrs_created && bcg_bypass_retry_count++ < 30) {
 		pr_info(BCG_NAME ": bypass attrs not ready, retry=%d\n",
@@ -731,12 +663,18 @@ static void bcg_remove_real_bypass_attrs(void)
 
 static int __init bomb_charge_init(void)
 {
+	int ret;
+
 	bcg_register_power_supply_aliases();
 
-	bcg_create_real_bypass_attrs();
-	if (!bcg_bypass_attrs_created)
+	ret = bcg_create_real_bypass_attrs();
+	if (ret == -EPROBE_DEFER) {
 		schedule_delayed_work(&bcg_bypass_retry_work,
 				      msecs_to_jiffies(2000));
+	} else if (ret) {
+		bcg_unregister_power_supply_aliases();
+		return ret;
+	}
 
 	pr_info(BCG_NAME ": loaded\n");
 	return 0;
@@ -744,19 +682,24 @@ static int __init bomb_charge_init(void)
 
 static void __exit bomb_charge_exit(void)
 {
+	int ret;
+
 	cancel_delayed_work_sync(&bcg_bypass_retry_work);
-	cancel_delayed_work_sync(&bcg_bypass_reassert_work);
+
+	/* Never leave a module-owned bypass active after removing the module. */
+	if (READ_ONCE(bcg_real_bypass_cached) ||
+	    READ_ONCE(bcg_bypass_guard_active)) {
+		ret = bcg_real_bypass_set(false);
+		if (ret)
+			pr_warn(BCG_NAME ": charger restore during unload failed: %d\n",
+				ret);
+	} else {
+		cancel_delayed_work_sync(&bcg_bypass_reassert_work);
+	}
+
+	bcg_unregister_bypass_guards();
 	bcg_remove_real_bypass_attrs();
 	bcg_unregister_power_supply_aliases();
-
-	if (bcg_cp_guard_registered) {
-		unregister_kprobe(&bcg_kp_cp_set_mode);
-		unregister_kprobe(&bcg_kp_cp_device_init);
-		unregister_kprobe(&bcg_kp_cp_enable_adc);
-		unregister_kprobe(&bcg_kp_charger_enable);
-		unregister_kprobe(&bcg_kp_charger_powerpath);
-		unregister_kprobe(&bcg_kp_set_charging_current);
-	}
 }
 
 module_init(bomb_charge_init);
