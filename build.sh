@@ -74,11 +74,11 @@ SUSFS_PATCH="gki-android14-6.1"
 log "Changelog of repos"
 gh api "repos/david98pc/android_kernel_6.1/commits?sha=${KERNEL_BRANCH}&per_page=10" --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
 > "$RELEASE_DIR/android_kernel-6.1_changelog.txt"
-gh api 'repos/tiann/KernelSU/commits?sha=main&per_page=10' --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
+gh api "repos/tiann/KernelSU/commits?sha=${KSU_TAG:-main}&per_page=10" --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
 > "$RELEASE_DIR/ksu_changelog.txt"
-gh api 'repos/SukiSU-Ultra/SukiSU-Ultra/commits?sha=builtin&per_page=10' --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
+gh api "repos/SukiSU-Ultra/SukiSU-Ultra/commits?sha=${SKSU_TAG:-main}&per_page=10" --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
 > "$RELEASE_DIR/sukisu_changelog.txt"
-gh api 'repos/pershoot/KernelSU-Next/commits?sha=dev-susfs&per_page=10' --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
+gh api "repos/pershoot/KernelSU-Next/commits?sha=${KSUN_TAG:-dev-susfs}&per_page=10" --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
 > "$RELEASE_DIR/ksun_changelog.txt"
 
 # Download Clang
@@ -130,11 +130,15 @@ fi
 
 if [ "$KSU" = "SKSU" ]; then
   log "SukiSU-Ultra included"
-  if susfs_included; then
-    install_ksu "SukiSU-Ultra/SukiSU-Ultra" "builtin"
-  else
-    install_ksu "SukiSU-Ultra/SukiSU-Ultra" "main"
+  SKSU_BRANCH="${SKSU_TAG:-}"
+  if [ -z "$SKSU_BRANCH" ]; then
+    if susfs_included; then
+      SKSU_BRANCH="builtin"
+    else
+      SKSU_BRANCH="main"
+    fi
   fi
+  install_ksu "SukiSU-Ultra/SukiSU-Ultra" "$SKSU_BRANCH"
 
   if susfs_included; then
     log "SUSFS included"
@@ -153,7 +157,7 @@ fi
 
 if susfs_included && [ "$KSU" = "RSKSU" ]; then
   log "ReSukiSU included"
-  install_ksu "ReSukiSU/ReSukiSU" "main"
+  install_ksu "ReSukiSU/ReSukiSU" "${RSKSU_TAG:-main}"
 
   log "SUSFS included"
   git clone --depth=1 -q "$SUSFS_URL" -b "$SUSFS_BRANCH" "$SUSFS_DIR"
@@ -170,13 +174,14 @@ fi
 
 if [ "$KSU" = "KSU" ]; then
   log "KernelSU included"
+  KSU_BRANCH="${KSU_TAG:-main}"
   if ! susfs_included; then
-    install_ksu "tiann/KernelSU" "main"
+    install_ksu "tiann/KernelSU" "$KSU_BRANCH"
   fi
 
   if susfs_included; then
     VARIANT+="+Multiple-Managers"
-    git clone "https://github.com/tiann/KernelSU" && echo "[+] Repository cloned."
+    git clone -b "$KSU_BRANCH" "https://github.com/tiann/KernelSU" && echo "[+] Repository cloned."
     log "SUSFS included"
     git clone --depth=1 -q "$SUSFS_URL" -b "$SUSFS_BRANCH" "$SUSFS_DIR"
 
@@ -196,7 +201,7 @@ if [ "$KSU" = "KSU" ]; then
     git add .
     git commit -m "susfs patch"
     cd ..
-    bash "KernelSU/kernel/setup.sh" "main"
+    bash "KernelSU/kernel/setup.sh" "$KSU_BRANCH"
 
     cp -R $SUSFS_PATCHES/fs/* ./fs
     cp -R $SUSFS_PATCHES/include/linux/* ./include/linux/
@@ -211,10 +216,19 @@ fi
 
 if [ "$KSU" = "KSUN" ]; then
   log "KernelSU-Next included"
+  KSUN_BRANCH="${KSUN_TAG:-}"
+  if [ -z "$KSUN_BRANCH" ]; then
+    if susfs_included; then
+      KSUN_BRANCH="dev-susfs"
+    else
+      KSUN_BRANCH="dev"
+    fi
+  fi
+
   if susfs_included; then
-    install_ksu "pershoot/KernelSU-Next" "dev-susfs"
+    install_ksu "pershoot/KernelSU-Next" "$KSUN_BRANCH"
   else
-    install_ksu "KernelSU-Next/KernelSU-Next" "dev"
+    install_ksu "KernelSU-Next/KernelSU-Next" "$KSUN_BRANCH"
   fi
 
   if susfs_included; then
