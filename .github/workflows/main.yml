@@ -32,20 +32,56 @@ on:
           - "noneLTO"
           - "thinLTO"
           - "fullLTO"
+      KSU_TAG:
+        description: "Tag o versión de KernelSU (ej. main, v0.9.5)"
+        type: string
+        default: "main"
+      KSUN_TAG:
+        description: "Tag o versión de KernelSU-Next (ej. v1.0.5, dev-susfs)"
+        type: string
+        default: "v1.0.5"
+      SKSU_TAG:
+        description: "Tag o versión de SukiSU-Ultra (ej. main, builtin)"
+        type: string
+        default: "main"
+      RSKSU_TAG:
+        description: "Tag o versión de ReSukiSU (ej. main)"
+        type: string
+        default: "main"
       BUILD_VANILLA:
         description: "Build Vanilla (Sin Root)"
         type: boolean
         default: true
+      BUILD_KSU:
+        description: "Build con KernelSU"
+        type: boolean
+        default: false
+      BUILD_KSU_SUSFS:
+        description: "Build con KernelSU + SUSFS"
+        type: boolean
+        default: false
       BUILD_KSUN:
-        description: "Build with KernelSU-Next"
+        description: "Build con KernelSU-Next"
         type: boolean
         default: true
       BUILD_KSUN_SUSFS:
-        description: "Build with KernelSU-Next + SUSFS"
+        description: "Build con KernelSU-Next + SUSFS"
         type: boolean
         default: true
       BUILD_SKSU:
-        description: "Build with SukiSU-Ultra"
+        description: "Build con SukiSU-Ultra"
+        type: boolean
+        default: true
+      BUILD_SKSU_SUSFS:
+        description: "Build con SukiSU-Ultra + SUSFS"
+        type: boolean
+        default: true
+      BUILD_RSKSU:
+        description: "Build con ReSukiSU"
+        type: boolean
+        default: true
+      BUILD_RSKSU_SUSFS:
+        description: "Build con ReSukiSU + SUSFS"
         type: boolean
         default: true
 
@@ -67,6 +103,14 @@ jobs:
             ENTRIES="${ENTRIES}{\"name\":\"Vanilla\",\"KSU\":\"no\",\"KSU_SUSFS\":\"false\"},"
           fi
 
+          if [[ "${{ github.event.inputs.BUILD_KSU }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"KSU\",\"KSU\":\"KSU\",\"KSU_SUSFS\":\"false\"},"
+          fi
+
+          if [[ "${{ github.event.inputs.BUILD_KSU_SUSFS }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"KSU+SUSFS\",\"KSU\":\"KSU\",\"KSU_SUSFS\":\"true\"},"
+          fi
+
           if [[ "${{ github.event.inputs.BUILD_KSUN }}" == "true" ]]; then
             ENTRIES="${ENTRIES}{\"name\":\"KSUN\",\"KSU\":\"KSUN\",\"KSU_SUSFS\":\"false\"},"
           fi
@@ -74,9 +118,21 @@ jobs:
           if [[ "${{ github.event.inputs.BUILD_KSUN_SUSFS }}" == "true" ]]; then
             ENTRIES="${ENTRIES}{\"name\":\"KSUN+SUSFS\",\"KSU\":\"KSUN\",\"KSU_SUSFS\":\"true\"},"
           fi
-          
+
           if [[ "${{ github.event.inputs.BUILD_SKSU }}" == "true" ]]; then
             ENTRIES="${ENTRIES}{\"name\":\"SKSU\",\"KSU\":\"SKSU\",\"KSU_SUSFS\":\"false\"},"
+          fi
+
+          if [[ "${{ github.event.inputs.BUILD_SKSU_SUSFS }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"SKSU+SUSFS\",\"KSU\":\"SKSU\",\"KSU_SUSFS\":\"true\"},"
+          fi
+
+          if [[ "${{ github.event.inputs.BUILD_RSKSU }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"RSKSU\",\"KSU\":\"RSKSU\",\"KSU_SUSFS\":\"false\"},"
+          fi
+
+          if [[ "${{ github.event.inputs.BUILD_RSKSU_SUSFS }}" == "true" ]]; then
+            ENTRIES="${ENTRIES}{\"name\":\"RSKSU+SUSFS\",\"KSU\":\"RSKSU\",\"KSU_SUSFS\":\"true\"},"
           fi
 
           ENTRIES="[${ENTRIES%,}]"
@@ -130,6 +186,10 @@ jobs:
           KERNEL_REPO: https://github.com/david98pc/android_kernel_6.1
           KSU: ${{ matrix.KSU }}
           KSU_SUSFS: ${{ matrix.KSU_SUSFS }}
+          KSU_TAG: ${{ inputs.KSU_TAG }}
+          KSUN_TAG: ${{ inputs.KSUN_TAG }}
+          SKSU_TAG: ${{ inputs.SKSU_TAG }}
+          RSKSU_TAG: ${{ inputs.RSKSU_TAG }}
           TODO: ${{ inputs.TODO }}
           STATUS: ${{ inputs.STATUS }}
           LTO: ${{ inputs.LTO }}
@@ -169,17 +229,8 @@ jobs:
 
             {
             cat << EOF
-            ### 📢 GKI 6.1 Kernel Release
-
-            **Build Information:**
-            - 🐧 **Kernel:** Android 14 GKI (6.1.xx)
-            - 🔥 **LTO optimizations:** ${{ inputs.LTO }}
-            - 📦 **Variants:**
+            **Variants:**
             $(echo "$VARIANTS" | sed 's/^/  - /')
-            
-            **Optimizaciones incluidas:**
-            - KernelSU-Next / SukiSU-Ultra integrados
-            - Soporte para SUSFS habilitado según variante
             EOF
             } > release_body.md
 
@@ -192,3 +243,4 @@ jobs:
           files: |
             release-artifacts/*.zip
           body_path: release_body.md
+          
