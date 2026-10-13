@@ -358,22 +358,10 @@ extern android_rvh_schedule_handler_t fbg_android_rvh_schedule_callback;
 extern struct kmem_cache *oplus_task_struct_cachep;
 
 #define ots_to_ts(ots)	(ots->task)
-#define OTS_IDX			0
-
-static inline struct oplus_task_struct *get_oplus_task_struct(struct task_struct *t)
-{
-	struct oplus_task_struct *ots = NULL;
-
-	/* not Skip idle thread */
-	if (!t)
-		return NULL;
-
-	ots = (struct oplus_task_struct *) READ_ONCE(t->android_oem_data1[OTS_IDX]);
-	if (IS_ERR_OR_NULL(ots))
-		return NULL;
-
-	return ots;
-}
+/* Caller must keep t alive (task reference, tasklist lock, or RCU). */
+struct oplus_task_struct *get_oplus_task_struct(struct task_struct *t);
+struct oplus_rq *oplus_rq_for(struct rq *rq);
+bool oplus_sched_assist_ready(void);
 
 static inline unsigned long oplus_get_im_flag(struct task_struct *t)
 {

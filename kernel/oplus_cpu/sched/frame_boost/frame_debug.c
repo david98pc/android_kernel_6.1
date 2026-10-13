@@ -103,7 +103,7 @@ void cpu_val_systrace_c(unsigned long val, unsigned int cpu, char *msg, int msg_
 	if (strncmp(ptr->msg, msg, strlen(msg)))
 		return;
 	if (ptr->val != val) {
-		snprintf(buf, sizeof(buf), "C|10000|%s_cpu%d|%d\n", msg, cpu, val);
+		snprintf(buf, sizeof(buf), "C|10000|%s_cpu%d|%lu\n", msg, cpu, val);
 		tracing_mark_write(buf);
 		ptr->val = val;
 	}

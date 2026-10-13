@@ -1,138 +1,111 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (C) 2022 Oplus. All rights reserved.
+/* Copyright (C) 2022 Oplus. All rights reserved.
+ * Duchamp compatibility: private per-task data, independent of OEM slots.
  */
 #include <linux/slab.h>
 #include <linux/sched/task.h>
-#include <linux/minmax.h>
-#include <linux/align.h>
-#include <asm/cache.h>
-#include <linux/topology.h>
-#include <linux/vmalloc.h>
-#include <asm/barrier.h>
-#include <uapi/linux/sched/types.h>
 #include <linux/sched/cputime.h>
+#include <linux/hashtable.h>
+#include <linux/rcupdate.h>
 #include <kernel/sched/sched.h>
 #include "sa_oemdata.h"
 #include "sched_assist.h"
 #include "sa_common.h"
-
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_LOADBALANCE)
 #include "sa_balance.h"
 #endif
 
-
 struct kmem_cache *oplus_task_struct_cachep;
 EXPORT_SYMBOL(oplus_task_struct_cachep);
+static DEFINE_HASHTABLE(duchamp_task_state, 12);
+static DEFINE_RAW_SPINLOCK(duchamp_task_state_lock);
+static void init_oplus_task_struct(void *ptr);
 
-static inline struct oplus_task_struct *alloc_oplus_task_struct_node(int node)
+/* Entries stay alive until task destruction and a subsequent RCU grace period.
+ * The caller must hold a task reference or the usual tasklist/RCU protection.
+ */
+struct oplus_task_struct *get_oplus_task_struct(struct task_struct *tsk)
 {
-	return kmem_cache_alloc(oplus_task_struct_cachep, GFP_ATOMIC);
+	struct oplus_task_struct *ots, *found = NULL;
+
+	if (!tsk)
+		return NULL;
+	rcu_read_lock();
+	hash_for_each_possible_rcu(duchamp_task_state, ots,
+				  duchamp_hash_node, (unsigned long)tsk) {
+		if (READ_ONCE(ots->task) == tsk) {
+			found = ots;
+			break;
+		}
+	}
+	rcu_read_unlock();
+	return found;
 }
+EXPORT_SYMBOL_GPL(get_oplus_task_struct);
 
-static inline void free_oplus_task_struct(struct oplus_task_struct *ots)
+static int attach_task_state(struct task_struct *tsk)
 {
+	struct oplus_task_struct *ots, *entry;
+	unsigned long flags;
+
+	if (get_oplus_task_struct(tsk))
+		return 0;
+	ots = kmem_cache_alloc(oplus_task_struct_cachep, GFP_ATOMIC);
 	if (!ots)
-		return;
-
-	kmem_cache_free(oplus_task_struct_cachep, ots);
+		return -ENOMEM;
+	init_oplus_task_struct(ots);
+	ots->task = tsk;
+	INIT_HLIST_NODE(&ots->duchamp_hash_node);
+	raw_spin_lock_irqsave(&duchamp_task_state_lock, flags);
+	hash_for_each_possible(duchamp_task_state, entry,
+			       duchamp_hash_node, (unsigned long)tsk) {
+		if (entry->task == tsk) {
+			raw_spin_unlock_irqrestore(&duchamp_task_state_lock, flags);
+			kmem_cache_free(oplus_task_struct_cachep, ots);
+			return 0;
+		}
+	}
+	hash_add_rcu(duchamp_task_state, &ots->duchamp_hash_node,
+		     (unsigned long)tsk);
+	raw_spin_unlock_irqrestore(&duchamp_task_state_lock, flags);
+	return 0;
 }
 
-/* called from kernel_clone() to get node information for about to be created task */
-static int oplus_tsk_fork_get_node(struct task_struct *tsk)
+static void release_task_state_rcu(struct rcu_head *rcu)
 {
-	return NUMA_NO_NODE;
+	struct oplus_task_struct *ots = container_of(rcu,
+				struct oplus_task_struct, duchamp_rcu);
+	kmem_cache_free(oplus_task_struct_cachep, ots);
 }
 
 void android_vh_dup_task_struct_handler(void *unused,
 		struct task_struct *tsk, struct task_struct *orig)
 {
-	int node;
-	struct oplus_task_struct *ots = NULL;
-
-	if (!tsk || !orig)
-		return;
-	/* The required space has been allocated */
-	if (!IS_ERR_OR_NULL((void *)tsk->android_oem_data1[OTS_IDX]))
-		return;
-
-	node = oplus_tsk_fork_get_node(orig);
-	ots = alloc_oplus_task_struct_node(node);
-	if (IS_ERR_OR_NULL(ots)) {
-		ux_err("failed %s oplus_task_struc common:%s, pid:%d, tgid=%d\n", __func__, tsk->comm, tsk->pid, tsk->tgid);
-		return;
-	}
-
-	atomic_set(&ots->is_vip_mvp, 0);
-	ots->task = tsk;
-#if IS_ENABLED(CONFIG_ARM64_AMU_EXTN) && IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
-	ots->uid_struct = NULL;
-#endif
-	smp_mb();
-
-	WRITE_ONCE(tsk->android_oem_data1[OTS_IDX], (u64) ots);
+	if (tsk && orig && attach_task_state(tsk))
+		pr_warn_ratelimited("duchamp-oplus: task state allocation failed\n");
 }
 
 void android_vh_free_task_handler(void *unused, struct task_struct *tsk)
 {
-	struct oplus_task_struct *ots = NULL;
+	struct oplus_task_struct *ots;
+	unsigned long flags;
 
-	if (!tsk)
+	ots = get_oplus_task_struct(tsk);
+	if (!ots)
 		return;
-
-	ots = (struct oplus_task_struct *) READ_ONCE(tsk->android_oem_data1[OTS_IDX]);
-	if (IS_ERR_OR_NULL(ots))
-		return;
-
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_LOADBALANCE)
-	/*
-	 * NOTE:
-	 * When the task is destroyed, the task needs to be removed from the
-	 * rt_boost linked list, otherwise it may cause a crash due to access
-	 * to an illegal address.
-	 */
 	remove_rt_boost_task(tsk);
 #endif
-
-	WRITE_ONCE(tsk->android_oem_data1[OTS_IDX], 0);
-	barrier();
-
+	raw_spin_lock_irqsave(&duchamp_task_state_lock, flags);
+	hash_del_rcu(&ots->duchamp_hash_node);
+	raw_spin_unlock_irqrestore(&duchamp_task_state_lock, flags);
 #ifdef CONFIG_LOCKING_PROTECT
 	list_del_init(&ots->locking_entry);
 #endif
-	RB_CLEAR_NODE(&ots->ux_entry);
-	RB_CLEAR_NODE(&ots->exec_time_node);
 	list_del_init(&ots->fbg_list);
-	atomic_set(&ots->is_vip_mvp, 0);
-	ots->task = NULL;
-#if IS_ENABLED(CONFIG_ARM64_AMU_EXTN) && IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
-	ots->uid_struct = NULL;
-#endif
-	smp_mb();
-
-	free_oplus_task_struct(ots);
+	call_rcu(&ots->duchamp_rcu, release_task_state_rcu);
 }
 
-static int register_oemdata_hooks(void)
-{
-	int ret = 0;
-
-	REGISTER_TRACE_VH(android_vh_dup_task_struct, android_vh_dup_task_struct_handler);
-	REGISTER_TRACE_VH(android_vh_free_task, android_vh_free_task_handler);
-
-	return ret;
-}
-
-static void unregister_oemdata_hooks(void)
-{
-	UNREGISTER_TRACE_VH(android_vh_dup_task_struct, android_vh_dup_task_struct_handler);
-	UNREGISTER_TRACE_VH(android_vh_free_task, android_vh_free_task_handler);
-}
-
-/*
- * NOTE:
- * Initialize the oplus_task_struct here.
- */
 static void init_oplus_task_struct(void *ptr)
 {
 	struct oplus_task_struct *ots = ptr;
@@ -185,71 +158,85 @@ static void init_oplus_task_struct(void *ptr)
 	ots->fbg_depth = -1;
 }
 
-static void alloc_ots_mem_for_all_threads(void)
+
+static int alloc_existing_task_state(void)
 {
 	struct task_struct *p, *g;
-	u32 iter_cpu;
+	int cpu, ret = 0;
 
 	read_lock(&tasklist_lock);
-
 	for_each_process_thread(g, p) {
-		struct oplus_task_struct *ots = NULL;
-
-		ots = (struct oplus_task_struct *) READ_ONCE(p->android_oem_data1[OTS_IDX]);
-		if (IS_ERR_OR_NULL(ots)) {
-			ots = kmem_cache_alloc(oplus_task_struct_cachep, GFP_ATOMIC);
-
-			if (!IS_ERR_OR_NULL(ots)) {
-				ots->task = p;
-#if IS_ENABLED(CONFIG_ARM64_AMU_EXTN) && IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
-				ots->uid_struct = NULL;
-#endif
-				smp_mb();
-
-				WRITE_ONCE(p->android_oem_data1[OTS_IDX], (u64) ots);
-			}
+		if (attach_task_state(p)) {
+			ret = -ENOMEM;
+			break;
 		}
 	}
-	for_each_possible_cpu(iter_cpu) {
-		struct oplus_task_struct *ots = NULL;
-
-		p = cpu_rq(iter_cpu)->idle;
-		ots = (struct oplus_task_struct *) READ_ONCE(p->android_oem_data1[OTS_IDX]);
-		if (IS_ERR_OR_NULL(ots)) {
-			ots = kmem_cache_alloc(oplus_task_struct_cachep, GFP_ATOMIC);
-			if (!IS_ERR_OR_NULL(ots)) {
-				ots->task = p;
-#if IS_ENABLED(CONFIG_ARM64_AMU_EXTN) && IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
-				ots->uid_struct = NULL;
-#endif
-				smp_mb();
-
-				WRITE_ONCE(p->android_oem_data1[OTS_IDX], (u64) ots);
+	if (!ret) {
+		for_each_possible_cpu(cpu) {
+			if (attach_task_state(cpu_rq(cpu)->idle)) {
+				ret = -ENOMEM;
+				break;
 			}
 		}
 	}
 	read_unlock(&tasklist_lock);
+	return ret;
 }
 
-int sa_oemdata_init(void)
+static void unregister_oemdata_hooks(void)
 {
-	oplus_task_struct_cachep = kmem_cache_create("oplus_task_struct",
-			sizeof(struct oplus_task_struct), 0,
-			SLAB_PANIC|SLAB_ACCOUNT, init_oplus_task_struct);
-
-	if (!oplus_task_struct_cachep)
-		return -ENOMEM;
-
-	alloc_ots_mem_for_all_threads();
-
-	register_oemdata_hooks();
-
-	return 0;
+	unregister_trace_android_vh_dup_task_struct(
+		android_vh_dup_task_struct_handler, NULL);
+	unregister_trace_android_vh_free_task(android_vh_free_task_handler, NULL);
+	tracepoint_synchronize_unregister();
 }
 
 void __maybe_unused sa_oemdata_deinit(void)
 {
+	struct oplus_task_struct *ots;
+	struct hlist_node *tmp;
+	unsigned long flags;
+	int bucket;
+
 	unregister_oemdata_hooks();
+	raw_spin_lock_irqsave(&duchamp_task_state_lock, flags);
+	hash_for_each_safe(duchamp_task_state, bucket, tmp, ots, duchamp_hash_node) {
+		hash_del_rcu(&ots->duchamp_hash_node);
+		call_rcu(&ots->duchamp_rcu, release_task_state_rcu);
+	}
+	raw_spin_unlock_irqrestore(&duchamp_task_state_lock, flags);
+	rcu_barrier();
 	kmem_cache_destroy(oplus_task_struct_cachep);
 }
 
+int sa_oemdata_init(void)
+{
+	int ret;
+
+	oplus_task_struct_cachep = kmem_cache_create("duchamp_oplus_task_struct",
+		sizeof(struct oplus_task_struct), 0, SLAB_ACCOUNT, NULL);
+	if (!oplus_task_struct_cachep)
+		return -ENOMEM;
+	/* Cover task creation before walking existing tasks, not afterwards. */
+	ret = register_trace_android_vh_free_task(android_vh_free_task_handler, NULL);
+	if (ret)
+		goto destroy_cache;
+	ret = register_trace_android_vh_dup_task_struct(
+		android_vh_dup_task_struct_handler, NULL);
+	if (ret) {
+		unregister_trace_android_vh_free_task(android_vh_free_task_handler, NULL);
+		tracepoint_synchronize_unregister();
+		goto destroy_cache;
+	}
+	ret = alloc_existing_task_state();
+	if (ret) {
+		sa_oemdata_deinit();
+		return ret;
+	}
+	pr_info("duchamp-oplus: private task state initialized\n");
+	return 0;
+
+destroy_cache:
+	kmem_cache_destroy(oplus_task_struct_cachep);
+	return ret;
+}

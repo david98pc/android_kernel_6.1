@@ -10,6 +10,9 @@ IS_ENABLED is not allowed in here, because the macro will not work in OKI.
 #ifndef _OPLUS_SA_COMMON_STRUCT_H_
 #define _OPLUS_SA_COMMON_STRUCT_H_
 
+#include <linux/rcupdate.h>
+#include <linux/list.h>
+
 #define MAX_CLUSTER            (4)
 
 /*#if IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)*/
@@ -67,6 +70,9 @@ struct locking_info {
 
 /* Please add your own members of task_struct here :) */
 struct oplus_task_struct {
+	/* Private ownership: never alias Xiaomi/MediaTek OEM slots. */
+	struct hlist_node duchamp_hash_node;
+	struct rcu_head duchamp_rcu;
 	/* CONFIG_OPLUS_FEATURE_SCHED_ASSIST */
 	struct rb_node ux_entry;
 	struct rb_node exec_time_node;

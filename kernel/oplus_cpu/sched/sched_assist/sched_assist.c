@@ -148,10 +148,6 @@ static int register_scheduler_vendor_hooks(void)
 	return 0;
 }
 
-#define OPLUS_OEM_DATA_SIZE_TEST(ostruct, kstruct)		\
-	BUILD_BUG_ON(sizeof(ostruct) > (sizeof(u64) *		\
-		ARRAY_SIZE(((kstruct *)0)->android_oem_data1)))
-
 typedef int (*profile_event_register_t)(enum profile_type type,
 		struct notifier_block *n);
 profile_event_register_t  _profile_event_register;
@@ -188,12 +184,19 @@ void enable_sched_assist(int step) {
 }
 EXPORT_SYMBOL_GPL(enable_sched_assist);
 
+static bool duchamp_sched_assist_ready;
+
+bool oplus_sched_assist_ready(void)
+{
+	return READ_ONCE(duchamp_sched_assist_ready);
+}
+EXPORT_SYMBOL_GPL(oplus_sched_assist_ready);
+
 static int __init oplus_sched_assist_init(void)
 {
 	int ret;
 
-	/* compile time checks for vendor data size */
-	OPLUS_OEM_DATA_SIZE_TEST(struct oplus_rq, struct rq);
+	/* Oplus state is privately owned; no OEM padding is consumed. */
 
 	ret = sa_oemdata_init();
 	if (ret != 0)
@@ -221,6 +224,7 @@ static int __init oplus_sched_assist_init(void)
 	enable_sched_assist(OPLUS_UX_HOOK_MASK);
 #endif
 
+	WRITE_ONCE(duchamp_sched_assist_ready, true);
 	ux_debug("sched assist init succeed!\n");
 	return 0;
 }

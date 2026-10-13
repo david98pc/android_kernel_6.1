@@ -135,6 +135,7 @@ config OPLUS_FEATURE_FRAME_BOOST
 	tristate "frame boost"
 	default n
 	depends on OPLUS_FEATURE_PERFORMANCE_SCHED
+	depends on OPLUS_FEATURE_SCHED_ASSIST
 	help
 	  This moduler is used to improve frame missing by aggregating key-threads in one group,
 	  then adjust cpu frequence and placement.

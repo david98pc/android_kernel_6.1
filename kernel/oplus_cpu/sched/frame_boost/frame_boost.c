@@ -103,6 +103,11 @@ static int __init oplus_frame_boost_init(void)
 {
 	int ret = 0;
 
+	if (!oplus_sched_assist_ready()) {
+		pr_err("duchamp-oplus: frame boost requires initialized sched assist\n");
+		return -ENODEV;
+	}
+
 	fbg_sysctl_init();
 
 	ret = frame_info_init();

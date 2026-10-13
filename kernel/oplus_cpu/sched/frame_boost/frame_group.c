@@ -2495,7 +2495,7 @@ retry:
 
 		rq = cpu_rq(iter_cpu);
 		curr = rq->curr;
-		orq = (struct oplus_rq *)rq->android_oem_data1;
+		orq = oplus_rq_for(rq);
 
 		if (curr) {
 			struct oplus_task_struct *ots_curr =

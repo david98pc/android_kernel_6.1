@@ -347,6 +347,7 @@ fi
 
 # Build the actual kernel
 log "Building kernel..."
+cp "$OUTDIR/.config" "$RELEASE_DIR/config-${VARIANT}.txt"
 make ${MAKE_ARGS[@]} CC="ccache clang" CXX="ccache clang++" || exit $?
 
 # Check KMI Function symbol
@@ -386,11 +387,9 @@ cp "$KERNEL_IMAGE" .
 zip -r9 "$WORKDIR/$AK3_ZIP_NAME" ./*
 cd $OLDPWD
 
-if [ "$STATUS" != "BETA" ]; then
-  echo "BASE_NAME=$KERNEL_NAME-$VARIANT" >> $GITHUB_ENV
-  mkdir -p $RELEASE_DIR
-  mv $WORKDIR/*.zip $RELEASE_DIR
-fi
+echo "BASE_NAME=$KERNEL_NAME-$VARIANT" >> "$GITHUB_ENV"
+mkdir -p "$RELEASE_DIR"
+mv "$WORKDIR/$AK3_ZIP_NAME" "$RELEASE_DIR/"
 
 if [ "$STATUS" != "BETA" ]; then
   (
