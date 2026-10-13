@@ -33,21 +33,21 @@ on:
           - "thinLTO"
           - "fullLTO"
       KSU_TAG:
-        description: "Tag o versión de KernelSU (ej. main, v0.9.5)"
+        description: "KSU: latest selecciona release y manager publicados"
         type: string
-        default: "main"
+        default: "latest"
       KSUN_TAG:
-        description: "Tag o versión de KernelSU-Next (ej. v1.0.5, dev-susfs)"
+        description: "Next: latest selecciona release oficial y manager publicados"
         type: string
-        default: "v1.0.5"
+        default: "latest"
       SKSU_TAG:
-        description: "Tag o versión de SukiSU-Ultra (ej. main, builtin)"
+        description: "SukiSU: latest selecciona release y manager publicados"
         type: string
-        default: "main"
+        default: "latest"
       RSKSU_TAG:
-        description: "Tag o versión de ReSukiSU (ej. main)"
+        description: "ReSukiSU: latest selecciona el commit de un manager CI exitoso"
         type: string
-        default: "main"
+        default: "latest"
       BUILD_VANILLA:
         description: "Build Vanilla (Sin Root)"
         type: boolean
@@ -183,6 +183,7 @@ jobs:
       - name: Run Build Script
         env:
           GH_TOKEN: ${{ github.token }}
+          ROOT_MANAGER_TOKEN: ${{ secrets.ROOT_MANAGER_TOKEN }}
           KERNEL_REPO: https://github.com/david98pc/android_kernel_6.1
           KSU: ${{ matrix.KSU }}
           KSU_SUSFS: ${{ matrix.KSU_SUSFS }}
@@ -242,5 +243,7 @@ jobs:
           prerelease: false
           files: |
             release-artifacts/*.zip
+            release-artifacts/manager-*.apk
+            release-artifacts/root-manager-*.json
           body_path: release_body.md
           

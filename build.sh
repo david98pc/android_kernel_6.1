@@ -71,15 +71,35 @@ SUSFS_PATCHES="${SUSFS_DIR}/kernel_patches"
 SUSFS_BRANCH="gki-android14-6.1"
 SUSFS_PATCH="gki-android14-6.1"
 
+# Select one source revision and its published manager before building.
+ROOT_RECORD="$WORKDIR/root-source.json"
+ROOT_HELPER="$WORKDIR/py/root_pairing.py"
+ROOT_REF=""
+case "$KSU" in
+  KSU) ROOT_REF="${KSU_TAG:-latest}" ;;
+  KSUN) ROOT_REF="${KSUN_TAG:-latest}" ;;
+  SKSU) ROOT_REF="${SKSU_TAG:-latest}" ;;
+  RSKSU) ROOT_REF="${RSKSU_TAG:-latest}" ;;
+esac
+if [ -n "$ROOT_REF" ]; then
+  ROOT_PREPARE_ARGS=()
+  susfs_included && ROOT_PREPARE_ARGS+=(--susfs)
+  log "Preparing matching root source and manager for $KSU"
+  python3 "$ROOT_HELPER" prepare "$KSU" "$ROOT_REF" "$ROOT_RECORD" \
+    "$RELEASE_DIR" "${BUILD_NAME:-$KSU}" "${ROOT_PREPARE_ARGS[@]}" || exit 1
+  ROOT_REPO=$(python3 "$ROOT_HELPER" field "$ROOT_RECORD" repo) || exit 1
+  ROOT_COMMIT=$(python3 "$ROOT_HELPER" field "$ROOT_RECORD" commit) || exit 1
+  cp "$ROOT_RECORD" "$RELEASE_DIR/root-manager-${BUILD_NAME:-$KSU}.json" || exit 1
+fi
 log "Changelog of repos"
-gh api "repos/david98pc/android_kernel_6.1/commits?sha=${KERNEL_BRANCH}&per_page=10" --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
-> "$RELEASE_DIR/android_kernel-6.1_changelog.txt"
-gh api "repos/tiann/KernelSU/commits?sha=${KSU_TAG:-main}&per_page=10" --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
-> "$RELEASE_DIR/ksu_changelog.txt"
-gh api "repos/SukiSU-Ultra/SukiSU-Ultra/commits?sha=${SKSU_TAG:-main}&per_page=10" --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
-> "$RELEASE_DIR/sukisu_changelog.txt"
-gh api "repos/pershoot/KernelSU-Next/commits?sha=${KSUN_TAG:-dev-susfs}&per_page=10" --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])'\
-> "$RELEASE_DIR/ksun_changelog.txt"
+gh api "repos/david98pc/android_kernel_6.1/commits?sha=${KERNEL_BRANCH}&per_page=10" \
+  --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])' \
+  > "$RELEASE_DIR/android_kernel-6.1_changelog.txt"
+if [ -n "$ROOT_REF" ]; then
+  gh api "repos/$ROOT_REPO/commits?sha=$ROOT_COMMIT&per_page=10" \
+    --jq '.[] | "- [" + .sha[0:7] + "](" + .html_url + ") " + (.commit.message | split("\n")[0])' \
+    > "$RELEASE_DIR/root-${BUILD_NAME:-$KSU}_changelog.txt" || exit 1
+fi
 
 # Download Clang
 log "Downloading Clang..."
@@ -128,122 +148,41 @@ if [ "$DROIDSPACES" = "true" ]; then
   patch -p1 --fuzz=3 < "$KERNEL_PATCHES/droidspaces/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch"
 fi
 
-if [ "$KSU" = "SKSU" ]; then
-  log "SukiSU-Ultra included"
-  SKSU_BRANCH="${SKSU_TAG:-}"
-  if [ -z "$SKSU_BRANCH" ]; then
-    if susfs_included; then
-      SKSU_BRANCH="builtin"
-    else
-      SKSU_BRANCH="main"
+# Integrate the pinned checkout directly; never stash/reset it after patches.
+apply_root_patch() {
+  local patch_file="$1"
+  [ -f "$patch_file" ] || { echo "Missing required patch: $patch_file"; return 1; }
+  patch --batch --forward --fuzz=0 --dry-run -p1 < "$patch_file" || return 1
+  patch --batch --forward --fuzz=0 -p1 < "$patch_file"
+}
+if [ -n "$ROOT_REF" ]; then
+  python3 "$ROOT_HELPER" install "$ROOT_RECORD" "$KSRC" || exit 1
+  if susfs_included; then
+    log "Applying SUSFS patches to the selected root source"
+    git clone --depth=1 -q "$SUSFS_URL" -b "$SUSFS_BRANCH" "$SUSFS_DIR" || exit 1
+    if [ "$KSU" = "KSU" ]; then
+      VARIANT+="+Multiple-Managers"
+      cd "$KSRC/KernelSU" || exit 1
+      for patch_file in \
+        "$WORKDIR/patches/0001-feat-avc-log-spoofing.patch" \
+        "$WORKDIR/patches/0001-feat-add-multiple-managers.patch" \
+        "$WORKDIR/patches/0001-feat-throne_tracker-offload-to-kthread.patch" \
+        "$SUSFS_PATCHES/KernelSU/10_enable_susfs_for_ksu.patch" \
+        "$WORKDIR/patches/0001-feat-escape-persistent_allow_list-to-kthread.patch" \
+        "$WORKDIR/patches/0001-feat-supercalls-allow-userspace-to-pull-list-entries.patch"
+      do
+        apply_root_patch "$patch_file" || exit 1
+      done
+      cd "$KSRC" || exit 1
     fi
+    cp -R "$SUSFS_PATCHES"/fs/* ./fs || exit 1
+    cp -R "$SUSFS_PATCHES"/include/linux/* ./include/linux/ || exit 1
+    apply_root_patch "$KERNEL_PATCHES/susfs/fs_namespace.patch" || exit 1
+    apply_root_patch "$SUSFS_PATCHES/50_add_susfs_in_${SUSFS_PATCH}.patch" || exit 1
+    SUSFS_VERSION=$(sed -n 's/^#define SUSFS_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' ./include/linux/susfs.h)
+    echo "SUSFS_VERSION=$SUSFS_VERSION" >> "$GITHUB_ENV"
   fi
-  install_ksu "SukiSU-Ultra/SukiSU-Ultra" "$SKSU_BRANCH"
-
-  if susfs_included; then
-    log "SUSFS included"
-    git clone --depth=1 -q "$SUSFS_URL" -b "$SUSFS_BRANCH" "$SUSFS_DIR"
-
-    cp -R $SUSFS_PATCHES/fs/* ./fs
-    cp -R $SUSFS_PATCHES/include/linux/* ./include/linux/
-
-    patch -p1 --fuzz=3 < "$KERNEL_PATCHES/susfs/fs_namespace.patch"
-    patch -p1 --fuzz=3 < $SUSFS_PATCHES/50_add_susfs_in_${SUSFS_PATCH}.patch || echo "Common kernel SUSFS patch failed."
-
-    SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | sed 's/"//g')
-    echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
-  fi
-fi
-
-if susfs_included && [ "$KSU" = "RSKSU" ]; then
-  log "ReSukiSU included"
-  install_ksu "ReSukiSU/ReSukiSU" "${RSKSU_TAG:-main}"
-
-  log "SUSFS included"
-  git clone --depth=1 -q "$SUSFS_URL" -b "$SUSFS_BRANCH" "$SUSFS_DIR"
-
-  cp -R $SUSFS_PATCHES/fs/* ./fs
-  cp -R $SUSFS_PATCHES/include/linux/* ./include/linux/
-
-  patch -p1 --fuzz=3 < "$KERNEL_PATCHES/susfs/fs_namespace.patch"
-  patch -p1 --fuzz=3 < $SUSFS_PATCHES/50_add_susfs_in_${SUSFS_PATCH}.patch || echo "Common kernel SUSFS patch failed."
-
-  SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | sed 's/"//g')
-  echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
-fi
-
-if [ "$KSU" = "KSU" ]; then
-  log "KernelSU included"
-  KSU_BRANCH="${KSU_TAG:-main}"
-  if ! susfs_included; then
-    install_ksu "tiann/KernelSU" "$KSU_BRANCH"
-  fi
-
-  if susfs_included; then
-    VARIANT+="+Multiple-Managers"
-    git clone -b "$KSU_BRANCH" "https://github.com/tiann/KernelSU" && echo "[+] Repository cloned."
-    log "SUSFS included"
-    git clone --depth=1 -q "$SUSFS_URL" -b "$SUSFS_BRANCH" "$SUSFS_DIR"
-
-    cd KernelSU
-    git reset --soft HEAD~1
-    patch -p1 --fuzz=3 < "$WORKDIR/patches/0001-feat-avc-log-spoofing.patch"
-    patch -p1 --fuzz=3 < "$WORKDIR/patches/0001-feat-add-multiple-managers.patch"
-    patch -p1 --fuzz=3 < "$WORKDIR/patches/0001-feat-throne_tracker-offload-to-kthread.patch"
-    patch -p1 --fuzz=3 < "$SUSFS_PATCHES/KernelSU/10_enable_susfs_for_ksu.patch"
-    patch -p1 --fuzz=3 < "$WORKDIR/patches/0001-feat-escape-persistent_allow_list-to-kthread.patch"
-    patch -p1 --fuzz=3 < "$WORKDIR/patches/0001-feat-supercalls-allow-userspace-to-pull-list-entries.patch"
-    sed -i "/    git pull && echo \"\[+\] Repository updated.\"/d" "kernel/setup.sh"
-    
-    git config --global user.email "david98pc@users.noreply.github.com"
-    git config --global user.name "Davvvvvv"
-    
-    git add .
-    git commit -m "susfs patch"
-    cd ..
-    bash "KernelSU/kernel/setup.sh" "$KSU_BRANCH"
-
-    cp -R $SUSFS_PATCHES/fs/* ./fs
-    cp -R $SUSFS_PATCHES/include/linux/* ./include/linux/
-
-    patch -p1 --fuzz=3 < "$KERNEL_PATCHES/susfs/fs_namespace.patch"
-    patch -p1 --fuzz=3 < $SUSFS_PATCHES/50_add_susfs_in_${SUSFS_PATCH}.patch || echo "Common kernel SUSFS patch failed."
-
-    SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | sed 's/"//g')
-    echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
-  fi
-fi
-
-if [ "$KSU" = "KSUN" ]; then
-  log "KernelSU-Next included"
-  KSUN_BRANCH="${KSUN_TAG:-}"
-  if [ -z "$KSUN_BRANCH" ]; then
-    if susfs_included; then
-      KSUN_BRANCH="dev-susfs"
-    else
-      KSUN_BRANCH="dev"
-    fi
-  fi
-
-  if susfs_included; then
-    install_ksu "pershoot/KernelSU-Next" "$KSUN_BRANCH"
-  else
-    install_ksu "KernelSU-Next/KernelSU-Next" "$KSUN_BRANCH"
-  fi
-
-  if susfs_included; then
-    log "SUSFS included"
-    git clone --depth=1 -q "$SUSFS_URL" -b "$SUSFS_BRANCH" "$SUSFS_DIR"
-
-    cp -R $SUSFS_PATCHES/fs/* ./fs
-    cp -R $SUSFS_PATCHES/include/linux/* ./include/linux/
-
-    patch -p1 --fuzz=3 < "$KERNEL_PATCHES/susfs/fs_namespace.patch"
-    patch -p1 --fuzz=3 < $SUSFS_PATCHES/50_add_susfs_in_${SUSFS_PATCH}.patch || echo "Common kernel SUSFS patch failed."
-
-    SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | sed 's/"//g')
-    echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
-  fi
+  python3 "$ROOT_HELPER" pin "$ROOT_RECORD" "$KSRC" || exit 1
 fi
 
 if [ "$KSU_COMPAT" = "true" ]; then
