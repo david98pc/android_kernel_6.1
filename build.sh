@@ -4,7 +4,7 @@
 WORKDIR="$(pwd)"
 RELEASE_DIR="$WORKDIR/artifacts"
 
-KERNEL_NAME="Bomb-GKI"
+KERNEL_NAME="OplusBomb"
 USER="david98pc"
 HOST="Bomb-GKI"
 TIMEZONE="America/Mexico_City"
@@ -265,7 +265,7 @@ if [ "${TODO:-kernel}" = "kernel" ]; then
   else
     SUFFIX="${RELEASE}/${LATEST_COMMIT_HASH}"
   fi
-  config --set-str CONFIG_LOCALVERSION "-$KERNEL_NAME/$SUFFIX"
+  config --set-str CONFIG_LOCALVERSION "-$KERNEL_NAME/DavPorts_v1"
   config --disable CONFIG_LOCALVERSION_AUTO
   sed -i 's/echo "+"/# echo "+"/g' scripts/setlocalversion
 fi
