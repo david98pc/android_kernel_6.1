@@ -12,12 +12,16 @@ extern struct frame_group *frame_boost_groups[MAX_NUM_FBG_ID];
 static int fbg_status_show(struct seq_file *m, void *unused)
 {
 	unsigned int total = 0;
+	u64 enqueues, dequeues;
 	int i;
 
-	seq_puts(m, "port_diagnostics=3\n");
+	seq_puts(m, "port_diagnostics=4\n");
 	seq_printf(m, "sched_assist_ready=%d\nsched_assist_enabled=%d\nscene=%d\n",
 		oplus_sched_assist_ready(), READ_ONCE(global_sched_assist_enabled),
 		READ_ONCE(global_sched_assist_scene));
+	oplus_sa_ux_counters(&enqueues, &dequeues);
+	seq_printf(m, "sa_ux_enqueue_events=%llu\nsa_ux_dequeue_events=%llu\n",
+		enqueues, dequeues);
 	seq_printf(m, "frame_boost_enabled=%d\noplus_frequency_callback_registered=%d\n",
 		frame_boost_enabled(), !!READ_ONCE(fbg_hook.update_freq));
 	seq_puts(m, "frequency_fallback=cpufreq_update_util\n");

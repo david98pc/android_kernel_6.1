@@ -1094,6 +1094,22 @@ bool is_multiple_ux(struct oplus_task_struct *ots)
 	return delta;
 }*/
 
+static DEFINE_PER_CPU(u64, duchamp_ux_enqueue_events);
+static DEFINE_PER_CPU(u64, duchamp_ux_dequeue_events);
+
+void oplus_sa_ux_counters(u64 *enqueues, u64 *dequeues)
+{
+	int cpu;
+
+	*enqueues = 0;
+	*dequeues = 0;
+	for_each_possible_cpu(cpu) {
+		*enqueues += READ_ONCE(per_cpu(duchamp_ux_enqueue_events, cpu));
+		*dequeues += READ_ONCE(per_cpu(duchamp_ux_dequeue_events, cpu));
+	}
+}
+EXPORT_SYMBOL_GPL(oplus_sa_ux_counters);
+
 static void enqueue_ux_thread(struct rq *rq, struct task_struct *p)
 {
 	struct oplus_rq *orq;
@@ -1141,6 +1157,7 @@ static void enqueue_ux_thread(struct rq *rq, struct task_struct *p)
 		}
 		insert_task_to_ux_timeline(ots, orq);
 		save_task_vruntime_delta(p, ots);
+		this_cpu_inc(duchamp_ux_enqueue_events);
 	}
 	spin_unlock_irqrestore(orq->ux_list_lock, irqflag);
 }
@@ -1165,6 +1182,7 @@ static void dequeue_ux_thread(struct rq *rq, struct task_struct *p)
 	if (!oplus_rbnode_empty(&ots->ux_entry)) {
 		int ux_state_type;
 		update_ux_timeline_task_removal(orq, ots, NULL, false);
+		this_cpu_inc(duchamp_ux_dequeue_events);
 
 		/* inherit ux can only keep it's ux state in MAX_INHERIT_GRAN */
 		ux_state_type = get_ux_state_type(p);

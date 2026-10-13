@@ -362,6 +362,7 @@ extern struct kmem_cache *oplus_task_struct_cachep;
 struct oplus_task_struct *get_oplus_task_struct(struct task_struct *t);
 struct oplus_rq *oplus_rq_for(struct rq *rq);
 bool oplus_sched_assist_ready(void);
+void oplus_sa_ux_counters(u64 *enqueues, u64 *dequeues);
 
 static inline unsigned long oplus_get_im_flag(struct task_struct *t)
 {
