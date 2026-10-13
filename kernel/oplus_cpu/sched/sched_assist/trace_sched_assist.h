@@ -92,12 +92,10 @@ DEFINE_EVENT(inherit_ux_template, inherit_ux_unset,
 #endif /*_TRACE_SCHED_ASSIST_H */
 
 #undef TRACE_INCLUDE_PATH
-#ifdef CONFIG_OPLUS_SYSTEM_KERNEL_QCOM
-#define TRACE_INCLUDE_PATH .
-#endif
+#define TRACE_INCLUDE_PATH kernel/oplus_cpu/sched/sched_assist
 
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE trace_sched_assist
-/* This part must be outside protection */
-#include <trace/define_trace.h>
 
+/* Outside the header guard for trace generation. */
+#include <trace/define_trace.h>

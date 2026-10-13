@@ -43,10 +43,10 @@ TRACE_EVENT(find_frame_boost_cpu,
 #endif /*_TRACE_FRAME_BOOST_H */
 
 #undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH .
+#define TRACE_INCLUDE_PATH kernel/oplus_cpu/sched/frame_boost
 
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE frame_boost_trace
-/* This part must be outside protection */
-#include <trace/define_trace.h>
 
+/* Outside the header guard for trace generation. */
+#include <trace/define_trace.h>

@@ -347,7 +347,7 @@ fi
 
 # Build the actual kernel
 log "Building kernel..."
-make ${MAKE_ARGS[@]} CC="ccache clang" CXX="ccache clang++"
+make ${MAKE_ARGS[@]} CC="ccache clang" CXX="ccache clang++" || exit $?
 
 # Check KMI Function symbol
 $KMI_CHECK "$KSRC/android/abi_gki_aarch64.stg" "$MODULE_SYMVERS" || true
