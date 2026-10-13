@@ -181,8 +181,6 @@ static inline void add_cluster(const struct cpumask *cpus, struct list_head *hea
 	cluster = alloc_new_cluster(cpus);
 	insert_cluster(cluster, head);
 
-	fb_cluster[num_sched_clusters] = cluster;
-
 	num_sched_clusters++;
 }
 
@@ -191,8 +189,10 @@ static inline void assign_cluster_ids(struct list_head *head)
 	struct oplus_sched_cluster *cluster;
 	int pos = 0;
 
-	list_for_each_entry(cluster, head, list)
-		cluster->id = pos++;
+	list_for_each_entry(cluster, head, list) {
+		cluster->id = pos;
+		fb_cluster[pos++] = cluster;
+	}
 }
 
 static bool build_clusters(void)
@@ -1328,6 +1328,8 @@ static struct oplus_sched_cluster *best_cluster(struct frame_group *grp)
 {
 	int cpu;
 	unsigned long max_cap = 0, cap = 0, best_cap = 0;
+	unsigned long above_cap = ULONG_MAX, below_cap = 0;
+	struct oplus_sched_cluster *above = NULL, *below = NULL;
 	struct oplus_sched_cluster *cluster = NULL, *max_cluster = NULL, *best_cluster = NULL;
 	unsigned long util = atomic64_read(&grp->policy_util);
 	unsigned long boosted_grp_util = util;
@@ -1358,10 +1360,12 @@ static struct oplus_sched_cluster *best_cluster(struct frame_group *grp)
 			max_cluster = cluster;
 		}
 
-		if (boosted_grp_util <= cap) {
+		/* MTK modules can change capacities after our early init.  The
+		 * boot-time list order must not determine the current choice.
+		 */
+		if (boosted_grp_util <= cap && (!best_cluster || cap < best_cap)) {
 			best_cap = cap;
 			best_cluster = cluster;
-			break;
 		}
 	}
 
@@ -1376,18 +1380,24 @@ static struct oplus_sched_cluster *best_cluster(struct frame_group *grp)
 	if (num_sched_clusters <= 2) {
 		grp->available_cluster = NULL;
 	} else {
-		if (fb_cluster[num_sched_clusters-1]->id == best_cluster->id) {
-			/* if best_cluster is cpu7, then available_cluster is cpu4-6 */
-			grp->available_cluster = fb_cluster[num_sched_clusters-2];
-
-		} else if (fb_cluster[num_sched_clusters-2]->id == best_cluster->id) {
-			/* if best_cluster is cpu4-6, then available_cluster is cpu7 */
-			grp->available_cluster = fb_cluster[num_sched_clusters-1];
-
-		} else if (fb_cluster[num_sched_clusters-3]->id == best_cluster->id) {
-			/* if best_cluster is cpu0-3, then available_cluster is cpu4~6 */
-			grp->available_cluster = fb_cluster[num_sched_clusters-2];
+		for_each_sched_cluster(cluster) {
+			if (cluster == best_cluster)
+				continue;
+			cpu = cpumask_first(&cluster->cpus);
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_VT_CAP)
+			cap = real_cpu_cap[cpu];
+#else
+			cap = capacity_orig_of(cpu);
+#endif
+			if (cap >= best_cap && cap < above_cap) {
+				above_cap = cap;
+				above = cluster;
+			} else if (cap < best_cap && (!below || cap > below_cap)) {
+				below_cap = cap;
+				below = cluster;
+			}
 		}
+		grp->available_cluster = above ? above : below;
 	}
 
 	if (unlikely(sysctl_frame_boost_debug & DEBUG_SYSTRACE)) {

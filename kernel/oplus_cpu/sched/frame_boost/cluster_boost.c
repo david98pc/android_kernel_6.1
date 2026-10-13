@@ -53,6 +53,9 @@ struct oplus_sched_cluster *fbg_get_task_preferred_cluster(struct task_struct *p
 	int preferred_cluster_id;
 	struct oplus_task_struct *ots = get_oplus_task_struct(p);
 
+	if (IS_ERR_OR_NULL(ots))
+		return NULL;
+
 	if (likely(atomic_read(&user_interested_tgid) != p->tgid))
 		return NULL;
 

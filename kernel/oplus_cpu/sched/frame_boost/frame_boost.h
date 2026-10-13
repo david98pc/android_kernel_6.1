@@ -39,4 +39,5 @@ bool slide_rt_boost(struct task_struct *p);
 void fbg_set_stune_boost(int value, int grp_id, unsigned int type);
 int fbg_get_stune_boost(int grp_id, unsigned int type);
 void fbg_sysctl_init(void);
+int fbg_diagnostics_init(void);
 #endif /* _FRAME_BOOST_H_ */
