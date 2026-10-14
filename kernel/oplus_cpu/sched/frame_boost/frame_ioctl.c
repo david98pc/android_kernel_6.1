@@ -4,6 +4,7 @@
  */
 
 #include <linux/ioctl.h>
+#include <linux/slab.h>
 #include <linux/compat.h>
 #include <linux/sysctl.h>
 #include <linux/proc_fs.h>
@@ -774,20 +775,25 @@ static char *get_stune_boost_name(int type)
 static ssize_t proc_stune_boost_read(struct file *file, char __user *buf,
 		size_t count, loff_t *ppos)
 {
-	char buffer[4096];
+	char *buffer;
+	ssize_t ret;
 	int i, grp_id;
 	size_t len = 0;
+	buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!buffer) return -ENOMEM;
 
 	for (grp_id = 1; grp_id < MAX_NUM_FBG_ID; grp_id++) {
-		len += scnprintf(buffer + len, sizeof(buffer) - len, "grp_id:%d\n", grp_id);
+		len += scnprintf(buffer + len, PAGE_SIZE - len, "grp_id:%d\n", grp_id);
 		for (i = 0; i < BOOST_MAX_TYPE; ++i)
-			len += scnprintf(buffer + len, sizeof(buffer) - len, "%s:%d ",
+			len += scnprintf(buffer + len, PAGE_SIZE - len, "%s:%d ",
 				get_stune_boost_name(i), fbg_get_stune_boost(grp_id, i));
-		len += scnprintf(buffer + len, sizeof(buffer) - len, "\n");
+		len += scnprintf(buffer + len, PAGE_SIZE - len, "\n");
 	}
-	len += scnprintf(buffer + len, sizeof(buffer) - len, "\n");
+	len += scnprintf(buffer + len, PAGE_SIZE - len, "\n");
 
-	return simple_read_from_buffer(buf, count, ppos, buffer, len);
+	ret = simple_read_from_buffer(buf, count, ppos, buffer, len);
+	kfree(buffer);
+	return ret;
 }
 
 static const struct proc_ops ofb_stune_boost_fops = {

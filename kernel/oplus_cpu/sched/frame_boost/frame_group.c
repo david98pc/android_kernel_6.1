@@ -1637,7 +1637,8 @@ static bool valid_freq_querys(const struct cpumask *query_cpus, struct frame_gro
 				__LINE__, p->comm, p->pid, p->prio, ots->fbg_state, cpu);
 		}
 		/* detect infinite loop */
-		BUG_ON(++count > 1000);
+		if (++count > 1000)
+			return false;
 	}
 
 	return cpumask_intersects(&on_cpus, query_cpus);
@@ -1753,6 +1754,65 @@ unlock_fbg:
 	return (raw_util != *util);
 }
 EXPORT_SYMBOL_GPL(fbg_freq_policy_util);
+
+/* policy_util is normalized to 1024, while schedutil uses arch capacity.
+ * Query only recent groups on this policy. Trylocks avoid adding an inverse
+ * blocking lock order between rq/sugov and the userspace group controls.
+ */
+unsigned int duchamp_fbg_sugov_enabled;
+atomic64_t duchamp_fbg_sugov_queries = ATOMIC64_INIT(0);
+atomic64_t duchamp_fbg_sugov_hits = ATOMIC64_INIT(0);
+atomic64_t duchamp_fbg_sugov_busy = ATOMIC64_INIT(0);
+
+unsigned long duchamp_fbg_sugov_util(const struct cpumask *cpus,
+		unsigned long util, unsigned long capacity)
+{
+	unsigned long flags, candidate = 0;
+	unsigned int i;
+
+	if (!READ_ONCE(duchamp_fbg_sugov_enabled) || !__frame_boost_enabled() || !capacity)
+		return util;
+	atomic64_inc(&duchamp_fbg_sugov_queries);
+	for (i = 1; i < MAX_NUM_FBG_ID; i++) {
+		struct frame_group *grp = frame_boost_groups[i];
+		unsigned long value;
+		int boost = 0;
+
+		if (!grp)
+			continue;
+		if (!raw_spin_trylock_irqsave(&grp->lock, flags)) {
+			atomic64_inc(&duchamp_fbg_sugov_busy);
+			continue;
+		}
+		if (list_empty(&grp->tasks) || !valid_freq_querys(cpus, grp))
+			goto next;
+		value = min_t(u64, atomic64_read(&grp->policy_util), SCHED_CAPACITY_SCALE);
+		if (i >= MULTI_FBG_ID && i < MULTI_FBG_ID + MULTI_FBG_NUM) {
+			if (!grp->preferred_cluster ||
+			    (get_frame_state(i) == FRAME_END && !grp->handler_busy))
+				goto next;
+			if (value > grp->stune_boost[BOOST_UTIL_MIN_THRESHOLD])
+				boost = grp->stune_boost[BOOST_DEF_FREQ];
+		} else if (i == SF_FRAME_GROUP_ID) {
+			boost = grp->stune_boost[BOOST_SF_IN_GPU] ?
+				grp->stune_boost[BOOST_SF_FREQ_GPU] : grp->stune_boost[BOOST_SF_FREQ_NONGPU];
+		} else if (i != INPUTMETHOD_FRAME_GROUP_ID) {
+			goto next;
+		}
+		/* This adapter raises demand only; negative boosts never reduce CFS. */
+		value += schedtune_grp_margin(value, clamp(boost, 0, 100));
+		candidate = max(candidate, min(value, (unsigned long)SCHED_CAPACITY_SCALE));
+next:
+		raw_spin_unlock_irqrestore(&grp->lock, flags);
+	}
+	candidate = div_u64((u64)candidate * capacity, SCHED_CAPACITY_SCALE);
+	if (candidate > util) {
+		atomic64_inc(&duchamp_fbg_sugov_hits);
+		return candidate;
+	}
+	return util;
+}
+EXPORT_SYMBOL_GPL(duchamp_fbg_sugov_util);
 
 static inline bool should_update_cpufreq(u64 wallclock, struct frame_group *grp,
 	raw_spinlock_t *lock)

@@ -138,7 +138,7 @@ static int __init oplus_frame_boost_init(void)
 	}
 	if (fbg_diagnostics_init())
 		pr_warn("duchamp-oplus: cannot create read-only diagnostics\n");
-	ofb_debug("frame boost init succeed (duchamp diagnostics v6)\n");
+	ofb_debug("frame boost init succeed (duchamp diagnostics v8)\n");
 
 out:
 	return ret;

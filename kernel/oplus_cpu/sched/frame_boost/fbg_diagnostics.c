@@ -10,13 +10,22 @@
 
 extern struct frame_group *frame_boost_groups[MAX_NUM_FBG_ID];
 
+extern unsigned int duchamp_fbg_sugov_enabled;
+extern atomic64_t duchamp_fbg_sugov_queries, duchamp_fbg_sugov_hits, duchamp_fbg_sugov_busy;
+
 static int fbg_status_show(struct seq_file *m, void *unused)
 {
 	unsigned int total = 0;
 	u64 enqueues, dequeues;
 	int i;
 
-	seq_puts(m, "port_diagnostics=7\nsa_dequeue_hook=after_dequeue_task\n");
+	seq_printf(m, "game_opt_compiled=%d\ncpu_game_compiled=%d\ntouch_boost_compiled=%d\n",
+		IS_BUILTIN(CONFIG_DUCHAMP_OPLUS_GAME_OPT), IS_BUILTIN(CONFIG_DUCHAMP_OPLUS_CPU_GAME),
+		IS_BUILTIN(CONFIG_DUCHAMP_OPLUS_TOUCH_BOOST));
+	seq_printf(m, "schedutil_boost_enabled=%u\nfbg_sugov_queries=%lld\nfbg_sugov_hits=%lld\nfbg_sugov_busy=%lld\n",
+		READ_ONCE(duchamp_fbg_sugov_enabled), atomic64_read(&duchamp_fbg_sugov_queries),
+		atomic64_read(&duchamp_fbg_sugov_hits), atomic64_read(&duchamp_fbg_sugov_busy));
+	seq_puts(m, "port_diagnostics=8\nsa_dequeue_hook=after_dequeue_task\n");
 	seq_printf(m, "sched_assist_ready=%d\nsched_assist_enabled=%d\nscene=%d\n",
 		oplus_sched_assist_ready(), READ_ONCE(global_sched_assist_enabled),
 		READ_ONCE(global_sched_assist_scene));

@@ -86,7 +86,20 @@ out:
 	return result;
 }
 
+extern unsigned int duchamp_fbg_sugov_enabled;
+static int fbg_toggle_min;
+static int fbg_toggle_max = 1;
+
 struct ctl_table frame_boost_table[] = {
+	{
+		.procname = "schedutil_boost_enabled",
+		.data = &duchamp_fbg_sugov_enabled,
+		.maxlen = sizeof(unsigned int),
+		.mode = 0640,
+		.proc_handler = proc_dointvec_minmax,
+		.extra1 = &fbg_toggle_min,
+		.extra2 = &fbg_toggle_max,
+	},
 	{
 		.procname	= "frame_boost_enabled",
 		.data		= &sysctl_frame_boost_enable,

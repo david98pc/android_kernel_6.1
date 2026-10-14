@@ -230,3 +230,20 @@ config OPLUS_SCHED_HALT_MASK_PRT
 	depends on OPLUS_SYSTEM_KERNEL_QCOM
 	help
 	  cpu halt_mask partial_halt_mask and parse_client
+
+config DUCHAMP_OPLUS_GAME_OPT
+	bool "Duchamp Oplus game_opt frontend"
+	depends on CPU_FREQ && ANDROID_VENDOR_HOOKS && PROC_FS
+	default n
+	help
+	  Built-in game telemetry and optional boost controls for the Oplus ROM.
+
+config DUCHAMP_OPLUS_CPU_GAME
+	bool "Duchamp Oplus CPU game early detect frontend"
+	depends on CPU_FREQ && ANDROID_VENDOR_HOOKS && PROC_FS
+	default n
+
+config DUCHAMP_OPLUS_TOUCH_BOOST
+	bool "Duchamp input-driven frequency floor"
+	depends on CPU_FREQ && INPUT && SYSFS
+	default n

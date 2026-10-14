@@ -7,6 +7,7 @@
  */
 
 #include <trace/hooks/sched.h>
+#include <linux/duchamp_frame_boost.h>
 
 #define IOWAIT_BOOST_MIN	(SCHED_CAPACITY_SCALE / 8)
 
@@ -147,6 +148,7 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 				policy->cpuinfo.max_freq : policy->cur;
 	unsigned long next_freq = 0;
 
+	util = duchamp_fbg_sugov_util(policy->related_cpus, util, max);
 	util = map_util_perf(util);
 	trace_android_vh_map_util_freq(util, freq, max, &next_freq, policy,
 			&sg_policy->need_freq_update);
