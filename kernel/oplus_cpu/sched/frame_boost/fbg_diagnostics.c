@@ -16,7 +16,7 @@ static int fbg_status_show(struct seq_file *m, void *unused)
 	u64 enqueues, dequeues;
 	int i;
 
-	seq_puts(m, "port_diagnostics=6\n");
+	seq_puts(m, "port_diagnostics=7\nsa_dequeue_hook=after_dequeue_task\n");
 	seq_printf(m, "sched_assist_ready=%d\nsched_assist_enabled=%d\nscene=%d\n",
 		oplus_sched_assist_ready(), READ_ONCE(global_sched_assist_enabled),
 		READ_ONCE(global_sched_assist_scene));
