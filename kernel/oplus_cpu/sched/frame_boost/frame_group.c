@@ -576,6 +576,8 @@ void set_ui_thread(int grp_id, int pid, int tid)
 	struct oplus_task_struct *ots = NULL;
 	struct frame_group *grp = NULL;
 
+	if (!is_fbg(grp_id))
+		return;
 	grp = frame_boost_groups[grp_id];
 
 	if (is_multi_frame_fbg(grp_id) && !is_active_multi_frame_fbg(grp_id)) {
@@ -592,7 +594,7 @@ void set_ui_thread(int grp_id, int pid, int tid)
 	ui = find_task_by_vpid(pid);
 	if (ui) {
 		ots = get_oplus_task_struct(ui);
-		if (check_group_condition(ots->fbg_cur_group, grp_id)) {
+		if (IS_ERR_OR_NULL(ots) || check_group_condition(ots->fbg_cur_group, grp_id)) {
 			rcu_read_unlock();
 			goto done;
 		}
@@ -629,6 +631,8 @@ void set_render_thread(int grp_id, int pid, int tid)
 		return;
 	}
 
+	if (!is_fbg(grp_id))
+		return;
 	grp = frame_boost_groups[grp_id];
 
 	if (is_multi_frame_fbg(grp_id) && !is_active_multi_frame_fbg(grp_id)) {
@@ -645,7 +649,7 @@ void set_render_thread(int grp_id, int pid, int tid)
 	render = find_task_by_vpid(tid);
 	if (render) {
 		ots = get_oplus_task_struct(render);
-		if (check_group_condition(ots->fbg_cur_group, grp_id)) {
+		if (IS_ERR_OR_NULL(ots) || check_group_condition(ots->fbg_cur_group, grp_id)) {
 			rcu_read_unlock();
 			goto done;
 		}
@@ -678,6 +682,8 @@ void set_hwui_thread(int grp_id, int pid, int hwtid1, int hwtid2)
 	struct oplus_task_struct *hwots1 = NULL, *hwots2 = NULL;
 	struct frame_group *grp;
 
+	if (!is_fbg(grp_id))
+		return;
 	grp = frame_boost_groups[grp_id];
 
 	raw_spin_lock_irqsave(&grp->lock, flags);
@@ -692,7 +698,8 @@ void set_hwui_thread(int grp_id, int pid, int hwtid1, int hwtid2)
 	if (hwtask1 && hwtask2) {
 		hwots1 = get_oplus_task_struct(hwtask1);
 		hwots2 = get_oplus_task_struct(hwtask2);
-		if (check_group_condition(hwots1->fbg_cur_group, grp_id) ||
+		if (IS_ERR_OR_NULL(hwots1) || IS_ERR_OR_NULL(hwots2) ||
+		    check_group_condition(hwots1->fbg_cur_group, grp_id) ||
 			check_group_condition(hwots2->fbg_cur_group, grp_id)) {
 			rcu_read_unlock();
 			goto done;
@@ -748,7 +755,7 @@ void set_sf_thread(int pid, int tid)
 	ui = find_task_by_vpid(pid);
 	if (ui) {
 		ots = get_oplus_task_struct(ui);
-		if (check_group_condition(ots->fbg_cur_group, SF_FRAME_GROUP_ID)) {
+		if (IS_ERR_OR_NULL(ots) || check_group_condition(ots->fbg_cur_group, SF_FRAME_GROUP_ID)) {
 			rcu_read_unlock();
 			goto done;
 		}
@@ -785,7 +792,7 @@ void set_renderengine_thread(int pid, int tid)
 	render = find_task_by_vpid(tid);
 	if (render) {
 		ots = get_oplus_task_struct(render);
-		if (check_group_condition(ots->fbg_cur_group, SF_FRAME_GROUP_ID)) {
+		if (IS_ERR_OR_NULL(ots) || check_group_condition(ots->fbg_cur_group, SF_FRAME_GROUP_ID)) {
 			rcu_read_unlock();
 			goto done;
 		}
@@ -828,6 +835,8 @@ bool add_rm_related_frame_task(int grp_id, int pid, int tid, int add, int r_dept
 	struct frame_group *grp = NULL;
 	bool success = false;
 
+	if (!is_fbg(grp_id))
+		return false;
 	rcu_read_lock();
 	tsk = find_task_by_vpid(tid);
 	if (!tsk)
@@ -838,7 +847,9 @@ bool add_rm_related_frame_task(int grp_id, int pid, int tid, int add, int r_dept
 	if (add && is_same_uid(tsk, grp->ui)) {
 		add_task_to_frame_group(grp, tsk);
 	} else if (!add) {
-		task_removed = remove_task_from_frame_group(tsk);
+		struct oplus_task_struct *ots = get_oplus_task_struct(tsk);
+		if (ots && ots->fbg_cur_group == grp_id)
+			task_removed = remove_task_from_frame_group(tsk);
 	}
 	raw_spin_unlock_irqrestore(&grp->lock, flags);
 

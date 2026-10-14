@@ -5,6 +5,7 @@
 #include <linux/sched/cputime.h>
 #include <kernel/sched/sched.h>
 #include "frame_boost.h"
+#include "frame_ioctl.h"
 #include "../sched_assist/sa_common.h"
 
 extern struct frame_group *frame_boost_groups[MAX_NUM_FBG_ID];
@@ -15,7 +16,7 @@ static int fbg_status_show(struct seq_file *m, void *unused)
 	u64 enqueues, dequeues;
 	int i;
 
-	seq_puts(m, "port_diagnostics=4\n");
+	seq_puts(m, "port_diagnostics=5\n");
 	seq_printf(m, "sched_assist_ready=%d\nsched_assist_enabled=%d\nscene=%d\n",
 		oplus_sched_assist_ready(), READ_ONCE(global_sched_assist_enabled),
 		READ_ONCE(global_sched_assist_scene));
@@ -25,7 +26,7 @@ static int fbg_status_show(struct seq_file *m, void *unused)
 	seq_printf(m, "frame_boost_enabled=%d\noplus_frequency_callback_registered=%d\n",
 		frame_boost_enabled(), !!READ_ONCE(fbg_hook.update_freq));
 	seq_puts(m, "frequency_fallback=cpufreq_update_util\n");
-	seq_puts(m, "frame_ioctl_frontend=absent\n");
+	fbg_ioctl_diagnostics(m);
 	seq_printf(m, "clusters=%d\n", num_sched_clusters);
 	for (i = 0; i < num_sched_clusters && i < MAX_CLS_NUM; i++) {
 		struct oplus_sched_cluster *cluster = fb_cluster[i];

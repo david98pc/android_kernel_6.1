@@ -12,6 +12,7 @@
 #include "frame_boost.h"
 #include "frame_group.h"
 #include "frame_debug.h"
+#include "frame_ioctl.h"
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
 #include <../kernel/oplus_cpu/sched/sched_assist/sa_common.h>
 #endif
@@ -66,7 +67,7 @@ void fbg_set_stune_boost(int value, int grp_id, unsigned int type)
 {
 	struct frame_group *grp = NULL;
 
-	if (!vaild_stune_boost_type(type))
+	if (!is_fbg(grp_id) || !vaild_stune_boost_type(type))
 		return;
 	grp = frame_boost_groups[grp_id];
 	if (!grp)
@@ -79,7 +80,7 @@ int fbg_get_stune_boost(int grp_id, unsigned int type)
 {
 	struct frame_group *grp = NULL;
 
-	if (!vaild_stune_boost_type(type))
+	if (!is_fbg(grp_id) || !vaild_stune_boost_type(type))
 		return 0;
 	grp = frame_boost_groups[grp_id];
 	if (!grp)
@@ -130,9 +131,14 @@ static int __init oplus_frame_boost_init(void)
 		goto out;
 	}
 	fbg_dbg_init();
+	ret = frame_ioctl_init();
+	if (ret) {
+		pr_err("duchamp-oplus: frame ioctl init failed: %d\n", ret);
+		goto out;
+	}
 	if (fbg_diagnostics_init())
 		pr_warn("duchamp-oplus: cannot create read-only diagnostics\n");
-	ofb_debug("frame boost init succeed (duchamp diagnostics v3)\n");
+	ofb_debug("frame boost init succeed (duchamp diagnostics v5)\n");
 
 out:
 	return ret;
