@@ -89,7 +89,7 @@ static int register_scheduler_vendor_hooks(void)
 #ifndef CONFIG_OPLUS_SYSTEM_KERNEL_QCOM
 	REGISTER_TRACE_RVH(android_rvh_check_preempt_wakeup, android_rvh_check_preempt_wakeup_handler);
 #ifndef CONFIG_MTK_SCHED_VIP_TASK
-	REGISTER_TRACE_RVH(android_rvh_replace_next_task_fair, android_rvh_replace_next_task_fair_handler);
+	/* Duchamp: disabled after rb_erase crash in the task replacement hook. */
 #endif
 #endif
 
