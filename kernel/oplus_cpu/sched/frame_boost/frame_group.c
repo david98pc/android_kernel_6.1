@@ -10,6 +10,7 @@
 #include <linux/sched/cputime.h>
 #include <kernel/sched/sched.h>
 #include <linux/reciprocal_div.h>
+#include <linux/irq_work.h>
 
 #include <trace/hooks/binder.h>
 #include <trace/hooks/sched.h>
@@ -61,7 +62,22 @@ module_param_named(use_vutil_threshold, use_vutil_threshold, uint, 0644);
 
 struct frame_group *frame_boost_groups[MAX_NUM_FBG_ID];
 
-static DEFINE_RAW_SPINLOCK(freq_protect_lock);
+struct fbg_freq_request {
+	struct irq_work work;
+	atomic_t flags;
+};
+static DEFINE_PER_CPU(struct fbg_freq_request, fbg_freq_requests);
+static atomic64_t fbg_freq_queued = ATOMIC64_INIT(0);
+static atomic64_t fbg_freq_executed = ATOMIC64_INIT(0);
+static atomic64_t fbg_freq_offline = ATOMIC64_INIT(0);
+
+void fbg_freq_diagnostics(struct seq_file *m)
+{
+	seq_puts(m, "frequency_fallback=local_irq_work\n");
+	seq_printf(m, "fbg_freq_queued=%lld\nfbg_freq_executed=%lld\nfbg_freq_offline=%lld\n",
+		atomic64_read(&fbg_freq_queued), atomic64_read(&fbg_freq_executed),
+		atomic64_read(&fbg_freq_offline));
+}
 
 static atomic_t fbg_initialized = ATOMIC_INIT(0);
 
@@ -1755,13 +1771,44 @@ static inline bool should_update_cpufreq(u64 wallclock, struct frame_group *grp,
 	return true;
 }
 
+/* cpufreq_update_util requires the target CPU and an updated rq clock.
+ * Callers include runtime tracepoints with rq->lock already held, so taking
+ * another rq lock synchronously would introduce a lock-order inversion.
+ */
+static void fbg_freq_work(struct irq_work *work)
+{
+	struct fbg_freq_request *request = container_of(work,
+			struct fbg_freq_request, work);
+	struct rq *rq = this_rq();
+	struct rq_flags rf;
+	unsigned int flags = atomic_xchg(&request->flags, 0);
+
+	if (!flags || !frame_boost_enabled())
+		return;
+	rq_lock_irqsave(rq, &rf);
+	update_rq_clock(rq);
+	rcu_read_lock();
+	cpufreq_update_util(rq, flags);
+	rcu_read_unlock();
+	rq_unlock_irqrestore(rq, &rf);
+	atomic64_inc(&fbg_freq_executed);
+}
+
 static inline void cpufreq_update_util_wrap(struct rq *rq, unsigned int flags)
 {
-	unsigned long lock_flags;
+	struct fbg_freq_request *request;
+	int cpu = cpu_of(rq);
 
-	raw_spin_lock_irqsave(&freq_protect_lock, lock_flags);
-	cpufreq_update_util(rq, flags);
-	raw_spin_unlock_irqrestore(&freq_protect_lock, lock_flags);
+	if (!frame_boost_enabled())
+		return;
+	if (!cpu_online(cpu)) {
+		atomic64_inc(&fbg_freq_offline);
+		return;
+	}
+	request = &per_cpu(fbg_freq_requests, cpu);
+	atomic_or(flags, &request->flags);
+	if (irq_work_queue_on(&request->work, cpu))
+		atomic64_inc(&fbg_freq_queued);
 }
 
 bool default_group_update_cpufreq(int grp_id)
@@ -3025,6 +3072,14 @@ static void fbg_update_suspend_resume(void *unused, const char *action, int val,
 
 void register_frame_group_vendor_hooks(void)
 {
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct fbg_freq_request *request = &per_cpu(fbg_freq_requests, cpu);
+
+		atomic_set(&request->flags, 0);
+		init_irq_work(&request->work, fbg_freq_work);
+	}
 	/* Register vender hook in driver/android/binder.c */
 #ifdef TODO_DELME
 	register_android_vh_binder_proc_transaction_finish(fbg_binder_wakeup_hook, NULL);

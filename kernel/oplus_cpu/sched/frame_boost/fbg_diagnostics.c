@@ -16,7 +16,7 @@ static int fbg_status_show(struct seq_file *m, void *unused)
 	u64 enqueues, dequeues;
 	int i;
 
-	seq_puts(m, "port_diagnostics=5\n");
+	seq_puts(m, "port_diagnostics=6\n");
 	seq_printf(m, "sched_assist_ready=%d\nsched_assist_enabled=%d\nscene=%d\n",
 		oplus_sched_assist_ready(), READ_ONCE(global_sched_assist_enabled),
 		READ_ONCE(global_sched_assist_scene));
@@ -25,7 +25,7 @@ static int fbg_status_show(struct seq_file *m, void *unused)
 		enqueues, dequeues);
 	seq_printf(m, "frame_boost_enabled=%d\noplus_frequency_callback_registered=%d\n",
 		frame_boost_enabled(), !!READ_ONCE(fbg_hook.update_freq));
-	seq_puts(m, "frequency_fallback=cpufreq_update_util\n");
+	fbg_freq_diagnostics(m);
 	fbg_ioctl_diagnostics(m);
 	seq_printf(m, "clusters=%d\n", num_sched_clusters);
 	for (i = 0; i < num_sched_clusters && i < MAX_CLS_NUM; i++) {

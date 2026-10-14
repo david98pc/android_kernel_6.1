@@ -30,9 +30,29 @@ static atomic64_t frame_starts = ATOMIC64_INIT(0);
 static atomic64_t group_requests = ATOMIC64_INIT(0);
 static atomic64_t last_ctrl_cmd = ATOMIC64_INIT(0);
 static atomic64_t last_sys_cmd = ATOMIC64_INIT(0);
+#define FBG_ERROR_BUCKETS 17
+static atomic64_t error_counts[2][FBG_ERROR_BUCKETS];
+static atomic64_t error_cmds[2][FBG_ERROR_BUCKETS];
+static atomic_t error_codes[2][FBG_ERROR_BUCKETS];
+
+static void ofb_record_error(bool privileged, unsigned int cmd, long ret)
+{
+	unsigned int nr = _IOC_NR(cmd);
+	unsigned int bucket = FBG_ERROR_BUCKETS - 1;
+
+	if (_IOC_TYPE(cmd) == OFB_MAGIC && nr < CMD_ID_MAX)
+		bucket = nr;
+	else if (_IOC_TYPE(cmd) == OFB_EXTRA_MAGIC && nr >= 1 && nr <= 3)
+		bucket = CMD_ID_MAX + nr - 1;
+	atomic64_inc(&ioctl_errors);
+	atomic64_set(&error_cmds[privileged][bucket], cmd);
+	atomic_set(&error_codes[privileged][bucket], ret);
+	atomic64_inc(&error_counts[privileged][bucket]);
+}
 
 void fbg_ioctl_diagnostics(struct seq_file *m)
 {
+	int node, bucket;
 	seq_printf(m, "frame_ioctl_frontend=%s\n",
 		frame_boost_proc ? "present" : "absent");
 	seq_printf(m, "fbg_ctrl_calls=%lld\nfbg_sys_calls=%lld\nfbg_ioctl_errors=%lld\nfbg_frame_starts=%lld\nfbg_group_requests=%lld\n",
@@ -41,6 +61,18 @@ void fbg_ioctl_diagnostics(struct seq_file *m)
 		atomic64_read(&group_requests));
 	seq_printf(m, "fbg_last_ctrl_cmd=0x%llx\nfbg_last_sys_cmd=0x%llx\n",
 		atomic64_read(&last_ctrl_cmd), atomic64_read(&last_sys_cmd));
+	for (node = 0; node < 2; node++) {
+		for (bucket = 0; bucket < FBG_ERROR_BUCKETS; bucket++) {
+			s64 count = atomic64_read(&error_counts[node][bucket]);
+
+			if (!count)
+				continue;
+			seq_printf(m, "fbg_error_node=%s bucket=%d calls=%lld last_cmd=0x%llx last_errno=%d\n",
+				node ? "sys" : "ctrl", bucket, count,
+				atomic64_read(&error_cmds[node][bucket]),
+				atomic_read(&error_codes[node][bucket]));
+		}
+	}
 }
 
 /* Check the UI/render relationship before assigning kernel group state. */
@@ -574,11 +606,11 @@ static long ofb_dispatch(struct file *file, unsigned int cmd, unsigned long arg,
 	ret = privileged ? ofb_sys_ioctl_impl(file, cmd, arg) :
 		ofb_ioctl_impl(file, cmd, arg);
 	if (ret < 0)
-		atomic64_inc(&ioctl_errors);
+		ofb_record_error(privileged, cmd, ret);
 	mutex_unlock(&ofb_ioctl_lock);
 	return ret;
 unknown:
-	atomic64_inc(&ioctl_errors);
+	ofb_record_error(privileged, cmd, -ENOTTY);
 	return -ENOTTY;
 }
 
@@ -600,8 +632,12 @@ static long ofb_ctrl_compat_ioctl(struct file *file, unsigned int cmd, unsigned 
 
 static long ofb_sys_ctrl_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	if (_IOC_TYPE(cmd) == OFB_EXTRA_MAGIC && _IOC_NR(cmd) == NOTIFY_FRAME_START)
+	if (_IOC_TYPE(cmd) == OFB_EXTRA_MAGIC && _IOC_NR(cmd) == NOTIFY_FRAME_START) {
+		atomic64_inc(&sys_calls);
+		atomic64_set(&last_sys_cmd, cmd);
+		ofb_record_error(true, cmd, -EOPNOTSUPP);
 		return -EOPNOTSUPP;
+	}
 	return ofb_sys_ioctl(file, cmd, (unsigned long)(compat_ptr(arg)));
 }
 #endif
